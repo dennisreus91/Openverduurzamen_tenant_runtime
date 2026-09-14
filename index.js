@@ -132,6 +132,13 @@ function validateConfirmedDataBasic(data = {}) {
 }
 
 function normalizeConfirmedDataInput(data = {}) {
+  const pvAantal = Number(data.solar_panels_count);
+  const pvIngevuld =
+    data.solar_panels_count !== undefined &&
+    data.solar_panels_count !== null &&
+    String(data.solar_panels_count).trim() !== "" &&
+    Number.isFinite(pvAantal);
+
   return {
     soort_woning: String(data.soort_woning || "").trim(),
     build_year: Number(data.build_year),
@@ -164,6 +171,16 @@ function normalizeConfirmedDataInput(data = {}) {
     ...(String(data.verduurzamingsdoel || "").trim()
       ? { verduurzamingsdoel: String(data.verduurzamingsdoel).trim() }
       : {}),
+    // Aantal zonnepanelen: optioneel, uit het formulier. Geen enkele open bron
+    // kent het werkelijke aantal per adres, dus het moet van de klant komen.
+    // Alleen doorgeven als het er is, zodat orders zonder dit veld exact
+    // dezelfde confirmed_data houden. De report-api valideert het verder
+    // (1 tot 500, alleen bij aangevinkte zonnepanelen).
+    //
+    // Deze lijst is handmatig: een veld dat hier ontbreekt, komt voor het
+    // volledige rapport nooit aan, zonder dat er iets faalt. Het snelle rapport
+    // (/api/mid/stream) stuurt de body wel ongewijzigd door.
+    ...(pvIngevuld ? { solar_panels_count: pvAantal } : {}),
   };
 }
 
