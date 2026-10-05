@@ -145,6 +145,20 @@ function normalizeConfirmedDataInput(data = {}) {
         ? data.existing_measures.map((x) => String(x || "").trim()).filter(Boolean)
         : []
     )),
+    // Het doel van de verduurzaming, zoals de klant het in het formulier
+    // koos: laagste investering, kortste terugverdientijd of hoogste
+    // rendement. De report-api kiest daarop de drie scenario's.
+    //
+    // Deze lijst is een witte lijst: wat er niet in staat, valt weg. Zonder
+    // deze regel kwam het doel wel in het snelle rapport (die route geeft de
+    // body ongewijzigd door) maar niet in het volledige rapport, dat via de
+    // orderflow loopt. Dan kreeg dezelfde woning twee rapporten met andere
+    // pakketten -- precies wat we deze week uit de rekenkern hebben gehaald.
+    //
+    // Een tenant die dit veld niet stuurt, stuurt een lege string en krijgt
+    // exact het rapport van voorheen; de report-api negeert een onbekende of
+    // lege waarde.
+    verduurzamingsdoel: String(data.verduurzamingsdoel || "").trim(),
   };
 }
 
@@ -1670,4 +1684,8 @@ export function createTenantApp(config) {
 }
 
 // Re-export so tenant repos can compose if they ever need to (rare).
-export { fillTemplate, templateVars };
+// normalizeConfirmedDataInput is een witte lijst: wat er niet in staat, valt
+// weg op weg naar het volledige rapport. Geexporteerd zodat een test die lijst
+// kan vastleggen -- zie test/confirmed_data_doorgifte.test.js en de
+// vergelijkbare les in test/brand_payload.test.js.
+export { fillTemplate, templateVars, normalizeConfirmedDataInput };
