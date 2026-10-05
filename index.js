@@ -158,7 +158,12 @@ function normalizeConfirmedDataInput(data = {}) {
     // Een tenant die dit veld niet stuurt, stuurt een lege string en krijgt
     // exact het rapport van voorheen; de report-api negeert een onbekende of
     // lege waarde.
-    verduurzamingsdoel: String(data.verduurzamingsdoel || "").trim(),
+    // Alleen meesturen als er een keuze is: een order zonder dit veld houdt
+    // dan exact dezelfde confirmed_data als voorheen. Zo staat het ook op
+    // release/der-report, de tak waar de DER-releases van komen.
+    ...(String(data.verduurzamingsdoel || "").trim()
+      ? { verduurzamingsdoel: String(data.verduurzamingsdoel).trim() }
+      : {}),
   };
 }
 

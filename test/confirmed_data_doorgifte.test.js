@@ -41,10 +41,12 @@ test("elk veld uit het formulier komt door", () => {
   assert.deepEqual(uit.existing_measures, ["dakisolatie", "zonnepanelen"]);
 });
 
-test("een formulier zonder doel levert een leeg veld, geen gegokte waarde", () => {
-  const { verduurzamingsdoel, ...zonderDoel } = VOLLEDIG;
-  const uit = normalizeConfirmedDataInput(zonderDoel);
-  assert.equal(uit.verduurzamingsdoel, "", "leeg, en de report-api negeert dat");
+test("zonder keuze blijft het veld weg, zodat de order niet verandert", () => {
+  for (const leeg of [undefined, null, "", "   "]) {
+    const { verduurzamingsdoel, ...rest } = VOLLEDIG;
+    const uit = normalizeConfirmedDataInput(leeg === undefined ? rest : { ...rest, verduurzamingsdoel: leeg });
+    assert.equal("verduurzamingsdoel" in uit, false, `${JSON.stringify(leeg)} voegde het veld toe`);
+  }
 });
 
 test("onzin in het doelveld gaat er ongewijzigd door en wordt verderop genegeerd", () => {
