@@ -162,6 +162,25 @@ export function normalizeConfirmedDataInput(data = {}) {
     // volledige rapport nooit aan, zonder dat er iets faalt. Het snelle rapport
     // (/api/mid/stream) stuurt de body wel ongewijzigd door.
     ...(pvIngevuld ? { solar_panels_count: pvAantal } : {}),
+    // Het doel van de verduurzaming, zoals de klant het in het formulier
+    // koos: laagste investering, kortste terugverdientijd of hoogste
+    // rendement. De report-api kiest daarop de drie scenario's.
+    //
+    // Deze lijst is een witte lijst: wat er niet in staat, valt weg. Zonder
+    // deze regel kwam het doel wel in het snelle rapport (die route geeft de
+    // body ongewijzigd door) maar niet in het volledige rapport, dat via de
+    // orderflow loopt. Dan kreeg dezelfde woning twee rapporten met andere
+    // pakketten -- precies wat we deze week uit de rekenkern hebben gehaald.
+    //
+    // Een tenant die dit veld niet stuurt, stuurt een lege string en krijgt
+    // exact het rapport van voorheen; de report-api negeert een onbekende of
+    // lege waarde.
+    // Alleen meesturen als er een keuze is, net als het aantal panelen
+    // hierboven: een order zonder dit veld houdt dan exact dezelfde
+    // confirmed_data als voorheen. test/confirmed_data.test.js bewaakt dat.
+    ...(String(data.verduurzamingsdoel || "").trim()
+      ? { verduurzamingsdoel: String(data.verduurzamingsdoel).trim() }
+      : {}),
   };
 }
 
@@ -1607,4 +1626,8 @@ export function createTenantApp(config) {
 }
 
 // Re-export so tenant repos can compose if they ever need to (rare).
+// normalizeConfirmedDataInput staat op deze tak al als `export function`, dus
+// hij hoort hier niet nog een keer: dat is een dubbele export en dan start de
+// runtime niet. Zie test/confirmed_data_doorgifte.test.js voor wat die witte
+// lijst moet doorlaten.
 export { fillTemplate, templateVars };
