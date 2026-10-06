@@ -103,3 +103,27 @@ test("de witte lijst draagt de velden van alle drie de lijnen", async () => {
   assert.equal(gevuld.solar_panels_count, 12, "het aantal panelen (van release/der-report)");
   assert.equal(gevuld.verduurzamingsdoel, "kortste_terugverdientijd", "het doel (van main)");
 });
+
+test("de ligging van een appartement bereikt het volledige rapport", async () => {
+  // Dit veld bepaalt of vloer en dak warmte naar buiten verliezen (NTA 8800,
+  // 8.5). Het snelle rapport kreeg het al mee -- die route geeft de body
+  // ongewijzigd door -- maar het volledige rapport loopt langs deze witte
+  // lijst en kreeg het nooit. Dezelfde woning werd daardoor twee keer anders
+  // doorgerekend, zonder dat er iets faalde.
+  const { normalizeConfirmedDataInput } = await import("../index.js");
+
+  assert.equal(
+    "ligging_appartement" in normalizeConfirmedDataInput({}),
+    false,
+    "zonder waarde hoort het veld weg te blijven"
+  );
+  assert.equal(
+    normalizeConfirmedDataInput({ ligging_appartement: "bovenste_verdieping" }).ligging_appartement,
+    "bovenste_verdieping"
+  );
+  assert.equal(
+    "ligging_appartement" in normalizeConfirmedDataInput({ ligging_appartement: "  " }),
+    false,
+    "witruimte telt niet als keuze"
+  );
+});

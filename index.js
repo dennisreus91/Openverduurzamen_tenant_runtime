@@ -142,6 +142,17 @@ function normalizeConfirmedDataInput(data = {}) {
 
   return {
     soort_woning: String(data.soort_woning || "").trim(),
+    // De ligging van een appartement bepaalt of vloer en dak warmte naar
+    // buiten verliezen (NTA 8800, 8.5) -- bij een tussenverdieping grenzen
+    // beide aan een andere woning. Het snelle rapport kreeg dit veld al mee
+    // (die route geeft de body ongewijzigd door), maar het volledige rapport
+    // loopt langs deze witte lijst en kreeg het nooit. Dezelfde woning werd
+    // daardoor twee keer anders doorgerekend, zonder dat er iets faalde.
+    // Alleen meesturen als er een waarde is, zodat een order zonder dit veld
+    // exact dezelfde confirmed_data houdt.
+    ...(String(data.ligging_appartement || "").trim()
+      ? { ligging_appartement: String(data.ligging_appartement).trim() }
+      : {}),
     build_year: Number(data.build_year),
     floor_area_m2: Number(data.floor_area_m2),
     energy_label: String(data.energy_label || "").trim(),
