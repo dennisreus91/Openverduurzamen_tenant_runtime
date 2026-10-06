@@ -1577,14 +1577,78 @@ export function createTenantApp(config) {
         if (addr) rows.push(["Adres", addr]);
         rows.push(...humanizeConfirmed(ctxIn.confirmedData));
 
-        // Cap and attach the report HTML so WWW sees what the user saw.
+        // Cap and attach the report so WWW sees what the user saw.
+        // WWW asked for the attachment as PDF, so we render the
+        // standalone HTML through PDFBolt (same engine as the paid
+        // full report). If PDF generation fails we fall back to the
+        // HTML attachment — a lead mail with an .html attachment
+        // still beats no attachment at all.
         const rawHtml = typeof ctxIn.reportHtml === "string" ? ctxIn.reportHtml : "";
         if (rawHtml && rawHtml.length < 1_500_000) {
           const fnameSafe = (addr || "rapport").replace(/[^a-z0-9]+/gi, "_").slice(0, 60) || "rapport";
+          // Print-CSS: het rapport-HTML uit de engine is self-contained
+          // (inline styles + eigen <style>) en toont op de site de desktop-
+          // tabel. De PDF-wrapper herstylt dus NIET, maar schaalt het
+          // 920px-webontwerp alleen uniform (zoom 0.78) naar A4-content-
+          // breedte — look, fonts en verhoudingen blijven 1-op-1 staan.
+          // Belangrijk: de print-viewport volgt de papierbreedte (~726px),
+          // waaronder de eigen <768px media query van het rapport naar de
+          // hoge mobiele stapel schakelt. De .rapport .mid-report ...-
+          // regels hieronder forceren de desktop-variant met hogere
+          // specificiteit (0.3.0), ongeacht viewport van de renderer.
+          // Full-bleed: op de site is het rapport een kaart-op-grijze-
+          // pagina; in de PDF IS de pagina het rapport — de eigen
+          // achtergrondkleur (uit het rapport-HTML gelezen, tenant-
+          // onafhankelijk) loopt door tot de paginarand, het kaart-
+          // omhulsel (radius/rand/schaduw) vervalt en de padding wordt
+          // de paginamarge. Binnenkaarten behouden alles.
+          // Kalibratie: volledig rapport op één A4 (echt 6223AX-24
+          // rapport via lokale Chromium-print, sep 2026).
+          const pageBgMatch = rawHtml.match(/class="mid-report"[^>]*style="[^"]*background:\s*(#[0-9a-fA-F]{3,8})/);
+          const pageBg = pageBgMatch ? pageBgMatch[1] : "#fafbfc";
           const standalone = `<!doctype html><html lang="nl"><head><meta charset="utf-8"><title>Mid-rapport — ${escapeHtmlSimple(addr || "")}</title>
-<style>body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;line-height:1.55;max-width:920px;margin:24px auto;padding:0 16px}</style>
-</head><body><h1>Mid-rapport</h1><p><b>Adres:</b> ${escapeHtmlSimple(addr || "")}</p><hr/>${rawHtml}</body></html>`;
-          attachments.push({ filename: `mid_rapport_${fnameSafe}.html`, content: Buffer.from(standalone, "utf8") });
+<style>
+@page { size: A4; margin: 0; }
+html, body { margin: 0; padding: 0; background: ${pageBg}; }
+.rapport .mid-report .mid-grid { display: grid !important; }
+.rapport .mid-report .mid-mobile-stack { display: none !important; }
+.rapport .mid-report .mid-header { flex-direction: row !important; }
+.rapport .mid-report .mid-label-chip { min-width: 200px !important; display: block !important; }
+/* Rapport vult exact de A4-breedte (794/920 = 0.863): volledige bleed,
+   geen achtergrondstrook naast het rapport (gaf een zichtbare naad
+   met schaduwcascade van de kaarten). Hoogte blijft ruim op één A4. */
+.rapport { width: 920px; zoom: 0.863; }
+.rapport .mid-report > * { max-width: 100% !important; }
+.rapport .mid-report {
+  border-radius: 0 !important;
+  border: 0 !important;
+  padding: 26px 30px !important;
+  box-shadow: none !important;
+  box-sizing: border-box;
+}
+/* Schaduw van de grote sectie-kaarten uit in print: de gradient loopt
+   de paginarand in en mengt daar met de achtergrondkleur (de
+   "overlappende grijze vlakken"). Rand + radius blijven staan. */
+.rapport .mid-report .mid-grid,
+.rapport .mid-report .mid-kerngegevens,
+.rapport .mid-report .mid-footer,
+.rapport .mid-report .mid-label-chip { box-shadow: none !important; }
+/* CTA/bestelblok ("Bestel volledig rapport €30") hoort op de site,
+   niet in de lead-PDF naar de Woonwijzerwinkel. Bron- en disclaimer-
+   regels eronder blijven staan. */
+.rapport .mid-report .mid-footer { display: none !important; }
+.rapport .mid-header, .rapport .mid-grid, .rapport .mid-kerngegevens { break-inside: avoid; }
+.rapport h1, .rapport h2, .rapport h3 { break-after: avoid; }
+</style>
+</head><body><div class="rapport">${rawHtml}</div></body></html>`;
+          try {
+            const pdfBuffer = await htmlToPdfBuffer(standalone);
+            attachments.push({ filename: `mid_rapport_${fnameSafe}.pdf`, content: pdfBuffer });
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn("[lead] kon mid-rapport PDF niet genereren, val terug op HTML-bijlage:", e?.message || e);
+            attachments.push({ filename: `mid_rapport_${fnameSafe}.html`, content: Buffer.from(standalone, "utf8") });
+          }
         }
 
         reportContext = { title: "Mid-rapport gegevens", rows };
