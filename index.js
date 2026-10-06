@@ -989,9 +989,14 @@ export function createTenantApp(config) {
       let r;
       try {
         r = await undiciFetch(upstream, {
+          // De tenant hoort erbij, net als op /api/mid/stream. Zonder dit
+          // weet de report-api niet met welk rapportprofiel ze rekent, en
+          // krijgt de pagina de lichtere labelsprongen terug in plaats van
+          // dezelfde doorrekening als het rapport dat erop volgt. Het veld
+          // `doel` uit de browser gaat mee in de spread.
           method: "POST",
           headers: buildReportApiHeaders(),
-          body: JSON.stringify(req.body || {}),
+          body: JSON.stringify({ ...(req.body || {}), tenant: buildBrandPayload() }),
           dispatcher: longFetchAgent,
           signal: abort.signal,
         });

@@ -50,17 +50,28 @@ async function listen(handler) {
 }
 
 /**
- * Doet één POST /api/mid/stream tegen een app met deze config en geeft de
- * body terug die de proxy naar de report-api stuurde.
+ * Doet één POST tegen een app met deze config en geeft de body terug die de
+ * proxy naar de report-api stuurde.
+ *
+ * `pad` is de route op de tenant (standaard /api/mid/stream); `verzoek` is wat
+ * de browser stuurt. Elke proxyroute die de tenant meestuurt, hoort hier
+ * getest te worden -- dat is de les van deze suite.
  */
-async function capturedUpstreamBody(config) {
+async function capturedUpstreamBody(config, { pad = "/api/mid/stream", verzoek = null } = {}) {
   let captured = null;
+  const isStream = pad === "/api/mid/stream";
 
   const upstream = await listen((req, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
       captured = raw;
+      if (!isStream) {
+        // De ingest-proxy verwacht JSON terug, geen SSE.
+        res.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
+        res.end(JSON.stringify({ ok: true, model: {}, preview: {}, labelsprongen: null, doorrekening: null }));
+        return;
+      }
       // Minimale SSE-respons: de proxy pipet alleen door.
       // Connection: close sluit de socket die de proxy-Agent anders
       // keep-alive houdt. Dat alleen was niet genoeg om het proces te laten
@@ -80,10 +91,10 @@ async function capturedUpstreamBody(config) {
   const server = await listen(app);
 
   try {
-    await fetch(`http://127.0.0.1:${server.port}/api/mid/stream`, {
+    await fetch(`http://127.0.0.1:${server.port}${pad}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address: { postalcode: "1234AB", housenumber: "1" } }),
+      body: JSON.stringify(verzoek || { address: { postalcode: "1234AB", housenumber: "1" } }),
     }).then((r) => r.text());
   } finally {
     await server.close();
@@ -130,4 +141,40 @@ test("de adresvelden uit het verzoek blijven onaangetast", async () => {
   // De proxy voegt alleen de tenant toe; alles wat de browser stuurde moet
   // ongewijzigd doorgaan, anders verschuift het rapport op andere velden.
   assert.deepEqual(body.address, { postalcode: "1234AB", housenumber: "1" });
+});
+
+// --- de EPA-ingest-proxy --------------------------------------------------
+//
+// Dezelfde fout, een route later. Een tenant die het .epa-bestand uploadt,
+// krijgt zijn impact uit /api/epa/ingest. Zolang die proxy de tenant niet
+// meestuurde, wist de report-api niet met welk rapportprofiel ze rekende en
+// kwamen daar de lichtere labelsprongen terug -- terwijl het snelle rapport
+// erna wél met de rekenkern rekende. Twee antwoorden op dezelfde vraag, op
+// dezelfde pagina.
+
+const EPA_VERZOEK = { epa_base64: "UEsDBAo=", doel: "kortste_terugverdientijd" };
+
+test("de ingest-proxy stuurt het rapportprofiel mee", async () => {
+  const body = await capturedUpstreamBody(
+    {
+      id: "schil",
+      brand: { name: "Schil" },
+      report: { labelFloor: "A", labelScenarios: ["A", "A+", "A++"], fullReportEngine: true },
+    },
+    { pad: "/api/epa/ingest", verzoek: EPA_VERZOEK }
+  );
+
+  assert.equal(body.tenant.id, "schil");
+  assert.equal(body.tenant.report.fullReportEngine, true, "zonder dit veld rekent de ingest niet mee");
+  assert.deepEqual(body.tenant.report.labelScenarios, ["A", "A+", "A++"]);
+});
+
+test("de ingest-proxy laat het bestand en het doel ongewijzigd door", async () => {
+  const body = await capturedUpstreamBody(
+    { id: "schil", brand: {} },
+    { pad: "/api/epa/ingest", verzoek: EPA_VERZOEK }
+  );
+
+  assert.equal(body.epa_base64, EPA_VERZOEK.epa_base64, "het bestand mag niet verminkt raken");
+  assert.equal(body.doel, "kortste_terugverdientijd", "het gekozen doel gaat mee");
 });
