@@ -31,7 +31,7 @@ import {
   newOrderToken,
   listOrders,
 } from "./lib/orders_store.js";
-import { createMolliePayment, getMolliePayment } from "./lib/mollie_client.js";
+import { createMolliePayment, getMolliePayment, mollieTestmodus } from "./lib/mollie_client.js";
 import { htmlToPdfBuffer } from "./lib/pdfbolt_client.js";
 import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled } from "./lib/mail_client.js";
@@ -1845,6 +1845,11 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
   scheduleCleanup();
 
   console.log(`[tenant-runtime] Tenant '${config.id}' (${config.brand?.name || ""}) ready.`);
+  // Luid, niet stil: een tenant die per ongeluk in testmodus staat levert
+  // rapporten uit zonder dat er betaald is.
+  if (mollieTestmodus()) {
+    console.log(`[tenant-runtime] LET OP: betalingen staan in TESTMODUS (MOLLIE_TESTMODE=1) voor '${config.id}'. Er komt geen geld binnen.`);
+  }
   return app;
 }
 
