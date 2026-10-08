@@ -16,13 +16,24 @@
 # Add/remove lines to onboard or offboard.
 #
 # (sep 2026) De pin is een TARBALL-URL geworden:
-#   https://github.com/snowy-warmy/Openverduurzamen_tenant_runtime/archive/refs/tags/vX.Y.Z.tar.gz
+#   https://github.com/dennisreus91/Openverduurzamen_tenant_runtime/archive/refs/tags/vX.Y.Z.tar.gz
 # Reden: Render's build herschrijft git+https-dependencies naar SSH en faalt
 # dan op "Permission denied (publickey)". Met de build-cache erbij leek de
 # deploy te slagen terwijl de OUDE runtime bleef draaien (lead-BCC-incident,
 # 2 sep 2026). Een tarball-URL installeert keyloos via HTTPS en is cache-proof:
 # elke tag is een unieke URL. De sed herkent zowel het oude git+https- als
 # het tarball-formaat en herschrijft beide naar de nieuwe tag.
+#
+# (8 okt 2026) De runtime, report-api en data-api zijn van `snowy-warmy` naar
+# `dennisreus91` overgezet. GitHub leidt de oude URL door, dus dit script
+# werkte ook ongewijzigd -- maar die doorverwijzing vervalt zodra er onder
+# `snowy-warmy` opnieuw een repo met dezelfde naam komt, en dan breekt een
+# fleet-bump op het moment dat je hem nodig hebt. Daarom staat de eigenaar
+# hier nu uitgeschreven.
+#
+# De TENANT-repo's zijn NIET meegegaan: die staan nog onder `snowy-warmy`, en
+# tenants.txt hoort dus snowy-warmy-URL's te houden. Nagegaan op 8 okt 2026
+# met `git ls-remote`: onder dennisreus91 bestaan ze niet.
 
 set -euo pipefail
 
@@ -32,7 +43,7 @@ if [ -z "$VERSION" ]; then
   exit 2
 fi
 
-TARBALL_URL="https://github.com/snowy-warmy/Openverduurzamen_tenant_runtime/archive/refs/tags/${VERSION}.tar.gz"
+TARBALL_URL="https://github.com/dennisreus91/Openverduurzamen_tenant_runtime/archive/refs/tags/${VERSION}.tar.gz"
 
 TENANTS_FILE="$(dirname "$0")/tenants.txt"
 WORKDIR="${WORKDIR:-/tmp/of-fleet}"
