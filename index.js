@@ -31,10 +31,10 @@ import {
   newOrderToken,
   listOrders,
 } from "./lib/orders_store.js";
-import { createMolliePayment, getMolliePayment, mollieTestmodus } from "./lib/mollie_client.js";
+import { createMolliePayment, getMolliePayment, mollieTestmodus, refundMolliePayment } from "./lib/mollie_client.js";
 import { htmlToPdfBuffer } from "./lib/pdfbolt_client.js";
 import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
-import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled } from "./lib/mail_client.js";
+import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import {
@@ -631,6 +631,72 @@ export function createTenantApp(config) {
     };
   }
 
+  /**
+   * Een bestelling die definitief niet geleverd kan worden: de klant bericht
+   * en zijn geld terug.
+   *
+   * WAAROM ALLEEN BIJ "error"
+   * isRecoverableStatus() hieronder pakt paid, processing, report_generated,
+   * pdf_created en mail_failed opnieuw op -- de herstelronde probeert die
+   * gewoon nog eens. Alleen "error" is een eindstand. Zou je bij een
+   * herstelbare stand al terugbetalen, dan betaal je terug terwijl het rapport
+   * even later alsnog aankomt.
+   *
+   * EEN KEER, EN NIET VAKER
+   * `refund` op de order is de afscherming. Staat er al een poging in, dan
+   * doet deze functie niets meer. De herstelronde kan dezelfde order immers
+   * meerdere keren langs de foutafhandeling sturen, en dan zou een klant twee
+   * keer terugbetaald worden.
+   *
+   * DE MAIL GAAT ALTIJD, OOK ALS DE TERUGBETALING MISLUKT
+   * Dat is de kern: wie de afrondpagina sloot, hoort anders niets. Mislukt de
+   * terugbetaling, dan belooft de mail niets maar vraagt hij de klant contact
+   * op te nemen -- en de operationele alert vertelt ons dat er met de hand
+   * iets moet gebeuren.
+   */
+  async function meldMislukkingEnBetaalTerug(orderId) {
+    const order = getOrderById(orderId);
+    if (!order) return;
+    if (order.status !== "error") return;
+    if (order.refund) return; // al afgehandeld
+
+    const betaald = order?.payment?.id && String(order?.mollie_status || order?.payment?.status) === "paid";
+    let terugbetaling = { gepoogd: false, gelukt: false };
+
+    if (betaald) {
+      terugbetaling.gepoogd = true;
+      try {
+        const r = await refundMolliePayment({
+          paymentId: order.payment.id,
+          amountEur: Number(order.amount_eur),
+          description: `Rapport niet geleverd (order ${orderId})`,
+        });
+        terugbetaling = { gepoogd: true, gelukt: true, id: r.id, status: r.status, bedrag_eur: r.bedrag_eur };
+        logOrderPhase(orderId, "terugbetaald", { refund_id: r.id, bedrag_eur: r.bedrag_eur });
+      } catch (e) {
+        terugbetaling.error = String(e?.message || e).slice(0, 200);
+        logOrderPhase(orderId, "terugbetaling_mislukt", { error: terugbetaling.error });
+      }
+    }
+
+    // Eerst vastleggen, dan mailen: zo kan een mislukte mail niet leiden tot
+    // een tweede terugbetaling bij de volgende herstelronde.
+    updateOrder(orderId, { refund: { ...terugbetaling, at: nowIso() } });
+    appendStep(orderId, terugbetaling.gelukt ? "refunded" : "refund_skipped", {
+      betaald,
+      error: terugbetaling.error || null,
+    });
+
+    try {
+      await sendMislukteOrderEmail({ order: getOrderById(orderId), config, terugbetaling });
+      appendStep(orderId, "failure_mail_sent", { to: order.email });
+      logOrderPhase(orderId, "mislukking_gemeld", { to: order.email });
+    } catch (e) {
+      appendStep(orderId, "failure_mail_failed", { message: String(e?.message || e).slice(0, 200) });
+      logOrderPhase(orderId, "mislukking_melden_faalde", { error: String(e?.message || e).slice(0, 160) });
+    }
+  }
+
   function isRecoverableStatus(status) {
     return ["paid", "processing", "report_generated", "pdf_created", "mail_failed"].includes(String(status || ""));
   }
@@ -830,6 +896,11 @@ export function createTenantApp(config) {
           extra: { error: e?.message || String(e), step: e?.context?.step || current?.last_step || "error" },
         }).catch(() => {});
       }
+      // Alleen bij de eindstand: de klant bericht en zijn geld terug. Bij een
+      // herstelbare stand doet deze functie zelf niets, want de herstelronde
+      // gaat het nog eens proberen. Fire-and-forget, zoals de alert: een
+      // mislukte melding mag de foutafhandeling niet overschrijven.
+      meldMislukkingEnBetaalTerug(orderId).catch(() => {});
       throw e;
     }
   }
