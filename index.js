@@ -253,6 +253,12 @@ export function createTenantApp(config) {
   // global 5mb parser; body-parser skips already-parsed bodies, so every other
   // endpoint keeps the tighter limit.
   app.use("/api/epa/ingest", express.json({ limit: "20mb" }));
+  // Het energielabelrapport als PDF. Gemeten op drie echte labels: 600 kB tot
+  // 940 kB, en base64 maakt dat ~33% groter. Ruim onder de 20mb, maar de
+  // globale 5mb-parser zou een label met veel afbeeldingen alsnog kunnen
+  // weigeren -- en dat zou eruitzien als een kapot bestand in plaats van een
+  // te strakke limiet.
+  app.use("/api/label-pdf/ingest", express.json({ limit: "20mb" }));
   app.use("/api/mid/stream", express.json({ limit: "20mb" }));
   app.use("/api/mid/full-report-handoff", express.json({ limit: "20mb" }));
   app.use("/api/full/handoff", express.json({ limit: "20mb" }));
@@ -1088,11 +1094,26 @@ export function createTenantApp(config) {
   // Used by EPA-driven tenants (Softbee) whose intake is a file upload rather
   // than a postcode lookup.
   const EPA_INGEST_TIMEOUT_MS = Number(process.env.EPA_INGEST_TIMEOUT_MS || 120000);
-  app.post("/api/epa/ingest", async (req, res) => {
+
+  /**
+   * De doorgifte voor een bestandsupload naar de report-api.
+   *
+   * Twee ingangen komen hierop uit: het .epa-bestand van de adviseur en het
+   * officiele energielabelrapport (PDF) van de koper. De report-api leest
+   * beide tot hetzelfde model, dus alles hier -- tenant meesturen, time-out,
+   * foutafhandeling -- hoort identiek te zijn. Vandaar een gedeelde functie en
+   * geen tweede kopie: twee kopieen lopen uiteen, en dan gedraagt dezelfde
+   * woning zich anders afhankelijk van welk bestand iemand heeft.
+   *
+   * @param {string} pad        het pad op de report-api
+   * @param {string} foutcode   prefix voor de foutcodes naar de browser
+   * @param {string} traagheid  wat er in de time-outmelding aan de klant staat
+   */
+  const maakIngestProxy = (pad, foutcode, traagheid) => async (req, res) => {
     try {
       const renderUrl = getReportRenderUrl();
       if (!renderUrl) return res.status(500).json({ error: "FULL_APP_RENDER_URL ontbreekt." });
-      const upstream = renderUrl.replace(/\/api\/full\/render$/i, "/api/epa/ingest");
+      const upstream = renderUrl.replace(/\/api\/full\/render$/i, pad);
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), EPA_INGEST_TIMEOUT_MS);
       let r;
@@ -1118,16 +1139,26 @@ export function createTenantApp(config) {
       return res.send(text);
     } catch (e) {
       const timedOut = e?.name === "AbortError";
-      return res
-        .status(502)
-        .json({
-          error: timedOut
-            ? "De EPA-verwerking duurde te lang. Probeer het opnieuw of neem contact op als het probleem blijft."
-            : e?.message || String(e),
-          code: timedOut ? "epa_proxy_timeout" : "epa_proxy_error",
-        });
+      return res.status(502).json({
+        error: timedOut
+          ? `${traagheid} duurde te lang. Probeer het opnieuw of neem contact op als het probleem blijft.`
+          : e?.message || String(e),
+        code: timedOut ? `${foutcode}_timeout` : `${foutcode}_error`,
+      });
     }
-  });
+  };
+
+  app.post("/api/epa/ingest", maakIngestProxy("/api/epa/ingest", "epa_proxy", "De EPA-verwerking"));
+
+  // Het officiele energielabelrapport (PDF). Dit is de route voor kopers: de
+  // meesten hebben geen .epa -- dat is het werkbestand van de adviseur -- maar
+  // wel de label-PDF. De report-api leest hem tot hetzelfde model, en geeft in
+  // het veld `label_pdf` terug of de isolatiewaarden uit het label zelf komen
+  // of geschat zijn. Het formulier hoort die melding te tonen.
+  app.post(
+    "/api/label-pdf/ingest",
+    maakIngestProxy("/api/label-pdf/ingest", "label_pdf_proxy", "Het verwerken van het energielabel")
+  );
 
   // Address lookup. Identical contract to /api/full/lookup-address — the
   // old Mid frontend just calls a different path. Kept as a separate

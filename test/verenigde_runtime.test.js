@@ -46,6 +46,9 @@ async function listen(handler) {
 // meteen zegt wélke lijn eruit gevallen is.
 const ROUTES = [
   { lijn: "main", methode: "POST", pad: "/api/epa/ingest" },
+  // (8 okt 2026) De tweede bestandsingang: het officiele energielabelrapport
+  // als PDF, voor kopers die geen .epa hebben. Loopt via dezelfde doorgifte.
+  { lijn: "main", methode: "POST", pad: "/api/label-pdf/ingest" },
   { lijn: "main", methode: "POST", pad: "/api/epa/feedback" },
   { lijn: "main", methode: "GET", pad: "/api/admin/feedback" },
   { lijn: "release/der-report", methode: "POST", pad: "/api/mid/listing-extract" },
@@ -126,4 +129,40 @@ test("de ligging van een appartement bereikt het volledige rapport", async () =>
     false,
     "witruimte telt niet als keuze"
   );
+});
+
+test("de twee bestandsingangen gedragen zich identiek", async () => {
+  // Het .epa-bestand en het energielabelrapport (PDF) lopen via dezelfde
+  // doorgiftefunctie. Zou daar een tweede kopie van komen, dan lopen de twee
+  // uiteen in time-out, foutafhandeling of het meesturen van de tenant -- en
+  // dan gedraagt dezelfde woning zich anders afhankelijk van welk bestand
+  // iemand toevallig heeft. Deze test leest dat gedrag van buiten af.
+  const prevUrl = process.env.FULL_APP_RENDER_URL;
+  delete process.env.FULL_APP_RENDER_URL;
+
+  const app = createTenantApp({ id: "testtenant", brand: { name: "Test" } });
+  const server = await listen(app);
+
+  try {
+    const uitkomsten = [];
+    for (const pad of ["/api/epa/ingest", "/api/label-pdf/ingest"]) {
+      const res = await fetch(`http://127.0.0.1:${server.port}${pad}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      uitkomsten.push({ pad, status: res.status, body: await res.json() });
+    }
+
+    assert.equal(uitkomsten[0].status, uitkomsten[1].status, "zelfde status zonder upstream");
+    assert.deepEqual(
+      uitkomsten[0].body,
+      uitkomsten[1].body,
+      "zelfde foutmelding -- anders is de doorgifte gesplitst"
+    );
+  } finally {
+    await server.close();
+    if (prevUrl === undefined) delete process.env.FULL_APP_RENDER_URL;
+    else process.env.FULL_APP_RENDER_URL = prevUrl;
+  }
 });
