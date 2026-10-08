@@ -33,6 +33,7 @@ import {
 } from "./lib/orders_store.js";
 import { createMolliePayment, getMolliePayment, mollieTestmodus, refundMolliePayment } from "./lib/mollie_client.js";
 import { htmlToPdfBuffer } from "./lib/pdfbolt_client.js";
+import { runtimeVersie } from "./lib/runtime_versie.js";
 import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
@@ -1044,7 +1045,15 @@ export function createTenantApp(config) {
   // -------------------------------------------------------------------------
   // API surface
   // -------------------------------------------------------------------------
-  app.get("/health", (_req, res) => res.json({ ok: true, tenant: config.id, ts: nowIso() }));
+  // Het `runtime`-blok zegt WELKE runtime hier draait. Dat was van buiten niet
+  // vast te stellen, en precies dat maakte het lead-BCC-incident (2 sep 2026)
+  // zo lang onzichtbaar: de deploy leek te slagen terwijl de oude runtime
+  // bleef draaien. `tag` komt uit de werkelijk geïnstalleerde pin, niet uit
+  // het `version`-veld -- zie lib/runtime_versie.js voor waarom dat verschil
+  // uitmaakt.
+  app.get("/health", (_req, res) =>
+    res.json({ ok: true, tenant: config.id, ts: nowIso(), runtime: runtimeVersie() })
+  );
 
   // Public brand info — useful for frontends that want to render the
   // current tenant's name/colors without hardcoding them.
