@@ -121,7 +121,37 @@ update_one() {
     return 0
   fi
 
-  git -C "$repo_dir" add package.json || return 1
+  # Het lockfile MOET mee, en dat is geen detail. Een andere tag is een ANDER
+  # archief, dus de integrity-hash in package-lock.json hoort bij de oude
+  # bytes. Laat je het lockfile staan, dan weigert `npm ci` op Render met
+  # "package.json and package-lock.json are not in sync" -- en deze lus raakt
+  # elke tenant, dus dat gebeurt dan op alle tenants tegelijk.
+  #
+  # (8 okt 2026) Dit ontbrak hier. Nagegaan in de historie van tenant_der:
+  # elke pin-bump (V3.0.0 t/m V3.4.0) raakte beide bestanden, dus die bumps
+  # zijn met de hand gedaan en dit script heeft er nooit een uitgevoerd. De
+  # fout kon daardoor jaren blijven zitten zonder zich te melden -- precies
+  # het soort landmijn dat afgaat op het moment dat je het script eindelijk
+  # vertrouwt.
+  #
+  # --package-lock-only werkt het lockfile bij zonder node_modules te vullen:
+  # npm haalt de tarball op, berekent de integrity en schrijft die weg. Snel,
+  # en het is exact wat Render straks verifieert.
+  if ! (cd "$repo_dir" && npm install --package-lock-only --silent); then
+    echo "  ! npm kon het lockfile niet bijwerken; niet gepusht" >&2
+    git -C "$repo_dir" checkout -- package.json
+    return 1
+  fi
+
+  # En controleren dat het ook werkelijk gebeurd is. Een stil mislukte update
+  # levert exact de situatie op die we hier proberen te voorkomen.
+  if ! grep -q "refs/tags/${VERSION}.tar.gz" "$repo_dir/package-lock.json"; then
+    echo "  ! package-lock.json verwijst niet naar ${VERSION}; niet gepusht" >&2
+    git -C "$repo_dir" checkout -- package.json package-lock.json
+    return 1
+  fi
+
+  git -C "$repo_dir" add package.json package-lock.json || return 1
   git -C "$repo_dir" commit -m "chore: bump tenant-runtime to ${VERSION}" --quiet || return 1
   git -C "$repo_dir" push origin main --quiet || return 1
   echo "  ✓ pushed bump to ${VERSION}"
