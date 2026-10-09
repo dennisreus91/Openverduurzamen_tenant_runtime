@@ -80,6 +80,14 @@ function templateVars(config, extra = {}) {
     TENANT_PHONE: config?.contact?.phone || "",
     TENANT_EMAIL: config?.contact?.email || "",
     TENANT_WEBSITE: config?.contact?.website || "",
+    // Mag deze tenant een energielabel als PDF laten uploaden? Leeg betekent
+    // nee. Hiermee kan het formulier het uploadvak verbergen in plaats van het
+    // te tonen en daarna een 403 te vangen.
+    //
+    // Dit is NIET de afscherming: die zit in de report-api, die zonder de vlag
+    // weigert. Dit is alleen de nette vorm -- een knop die niet werkt hoort er
+    // niet te staan.
+    LABEL_PDF_UPLOAD: config?.report?.labelPdfUpload === true ? "1" : "",
     PRODUCT_NAME: config?.product?.name || "Volledig Verduurzamingsinzicht",
     TERMS_PATH: config?.product?.termsPath || "/algemene-voorwaarden.html",
     ...extra,
