@@ -87,7 +87,7 @@ function templateVars(config, extra = {}) {
     // Dit is NIET de afscherming: die zit in de report-api, die zonder de vlag
     // weigert. Dit is alleen de nette vorm -- een knop die niet werkt hoort er
     // niet te staan.
-    LABEL_PDF_UPLOAD: config?.report?.labelPdfUpload === true ? "1" : "",
+    LABEL_PDF_UPLOAD: extra.labelPdfUpload === true ? "1" : "",
     PRODUCT_NAME: config?.product?.name || "Volledig Verduurzamingsinzicht",
     TERMS_PATH: config?.product?.termsPath || "/algemene-voorwaarden.html",
     ...extra,
@@ -412,6 +412,37 @@ export function createTenantApp(config) {
    * output. Keep keys flat and stable so changes to the runtime don't
    * silently break the renderer.
    */
+  /**
+   * Mag deze tenant een energielabel als PDF laten uploaden?
+   *
+   * Twee plekken kunnen het zeggen, en de omgeving wint:
+   *
+   *   LABEL_PDF_UPLOAD=1   aan,  ongeacht de config
+   *   LABEL_PDF_UPLOAD=0   uit,  ongeacht de config
+   *   niet gezet           dan telt `report.labelPdfUpload` uit tenant.config.js
+   *
+   * Waarom de omgeving voorgaat: een env-variabele is in het Render-dashboard
+   * om te zetten zonder commit en zonder uitrol. Dat is precies wat je wil bij
+   * een functie die je per tenant wilt kunnen aan- en uitzetten, en zeker bij
+   * uitzetten -- als er iets mis is met de upload wil je hem binnen een minuut
+   * weg hebben, niet na een deploy.
+   *
+   * Expliciet uit moet daarom ook kunnen, niet alleen aan. Zou alleen "1"
+   * iets doen, dan kon je een tenant die het in zijn config heeft staan niet
+   * meer stilleggen zonder code te wijzigen.
+   *
+   * Deze ene functie voedt beide kanten: het `report`-blok dat naar de
+   * report-api gaat (die de route afschermt) en de placeholder waarmee het
+   * formulier het uploadvak toont of verbergt. Twee bronnen zouden hier
+   * betekenen dat het vak zichtbaar is terwijl de route weigert.
+   */
+  function labelPdfAan() {
+    const env = String(process.env.LABEL_PDF_UPLOAD ?? "").trim().toLowerCase();
+    if (["1", "true", "ja", "aan", "on", "yes"].includes(env)) return true;
+    if (["0", "false", "nee", "uit", "off", "no"].includes(env)) return false;
+    return config?.report?.labelPdfUpload === true;
+  }
+
   function buildBrandPayload() {
     return {
       id: config.id,
@@ -426,7 +457,24 @@ export function createTenantApp(config) {
       // rapportprofiel onzichtbaar: de config stond dan wel in de tenant,
       // maar bereikte de renderer nooit. Tenants zonder `report` sturen een
       // leeg object en houden exact het oude gedrag.
-      report: config.report || {},
+      // De effectieve waarde van de upload-vlag, met twee eisen die elkaar
+      // bijten als je er een vergeet:
+      //
+      // 1. Staat de upload UIT, dan moet de sleutel WEG -- niet op false. Een
+      //    tenant zonder rapportprofiel hoort `{}` te sturen, want dat lege
+      //    object is het signaal "geen profiel" waar de report-api zijn eigen
+      //    defaults overheen legt. Een bestaande test bewaakt dat en viel hier
+      //    terecht om.
+      // 2. Maar hem alleen TOEVOEGEN volstaat niet: staat `labelPdfUpload:
+      //    true` in de config en zet de omgeving hem op 0, dan kopieert de
+      //    spread die true gewoon mee en doet het uitzetten niets. Daarom
+      //    expliciet verwijderen.
+      report: (() => {
+        const r = { ...(config.report || {}) };
+        if (labelPdfAan()) r.labelPdfUpload = true;
+        else delete r.labelPdfUpload;
+        return r;
+      })(),
     };
   }
 
@@ -930,6 +978,10 @@ export function createTenantApp(config) {
       BASE_URL: getBaseUrl(req),
       HANDOFF_TOKEN: String(req.query.handoff || ""),
       ORDER_ID: String(req.query.order_id || ""),
+      // Via `extra`, omdat templateVars() buiten createTenantApp staat en de
+      // omgevingsoverride daar niet kan zien. Zo blijft er EEN plek die
+      // bepaalt of de upload aan staat.
+      labelPdfUpload: labelPdfAan(),
     }));
     res.type("text/html; charset=utf-8").send(html);
   }

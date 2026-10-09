@@ -178,3 +178,49 @@ test("de ingest-proxy laat het bestand en het doel ongewijzigd door", async () =
   assert.equal(body.epa_base64, EPA_VERZOEK.epa_base64, "het bestand mag niet verminkt raken");
   assert.equal(body.doel, "kortste_terugverdientijd", "het gekozen doel gaat mee");
 });
+
+// --- de PDF-schakelaar via de omgeving ------------------------------------
+
+test("LABEL_PDF_UPLOAD overrulet de config, in beide richtingen", async () => {
+  // Waarom de omgeving voorgaat: die is in het Render-dashboard om te zetten
+  // zonder commit en zonder uitrol. Zeker bij UITzetten telt dat -- als er
+  // iets mis is met de upload wil je hem binnen een minuut weg hebben.
+  const metEnv = async (waarde, config) => {
+    const oud = process.env.LABEL_PDF_UPLOAD;
+    if (waarde === undefined) delete process.env.LABEL_PDF_UPLOAD;
+    else process.env.LABEL_PDF_UPLOAD = waarde;
+    try {
+      const body = await capturedUpstreamBody(config);
+      return body.tenant.report;
+    } finally {
+      if (oud === undefined) delete process.env.LABEL_PDF_UPLOAD;
+      else process.env.LABEL_PDF_UPLOAD = oud;
+    }
+  };
+
+  const aan = { id: "t", brand: { name: "T" }, report: { labelFloor: "A", labelPdfUpload: true } };
+  const uit = { id: "t", brand: { name: "T" }, report: { labelFloor: "A" } };
+
+  assert.equal((await metEnv(undefined, aan)).labelPdfUpload, true, "config aan, geen env");
+  assert.equal((await metEnv(undefined, uit)).labelPdfUpload, undefined, "config uit, geen env");
+  assert.equal((await metEnv("1", uit)).labelPdfUpload, true, "env zet hem AAN ondanks de config");
+
+  // De belangrijkste: uitzetten moet ook werken. Alleen "toevoegen als aan"
+  // volstaat niet -- dan kopieert de spread de true uit de config gewoon mee.
+  assert.equal((await metEnv("0", aan)).labelPdfUpload, undefined, "env zet hem UIT ondanks de config");
+});
+
+test("een tenant zonder profiel houdt een leeg report, ook met de vlag uit", async () => {
+  // De sleutel mag niet als `false` opduiken: dat lege object is het signaal
+  // "geen rapportprofiel", en de report-api legt daar zijn eigen defaults
+  // overheen.
+  const oud = process.env.LABEL_PDF_UPLOAD;
+  process.env.LABEL_PDF_UPLOAD = "0";
+  try {
+    const body = await capturedUpstreamBody({ id: "zonderprofiel", brand: { name: "Zonder" } });
+    assert.deepEqual(body.tenant.report, {});
+  } finally {
+    if (oud === undefined) delete process.env.LABEL_PDF_UPLOAD;
+    else process.env.LABEL_PDF_UPLOAD = oud;
+  }
+});
