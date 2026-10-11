@@ -1,12 +1,28 @@
 # One git URL per line. Add a new line per tenant. Comments with # ignored.
 # (sep 2026: juiste org + werkelijke reponamen; ssh-vorm weg — de script-host
 #  heeft geen GitHub-SSH-key, https clone werkt keyloos voor publieke repo's)
-https://github.com/snowy-warmy/tenant_woonwijzerwinkel.git
-https://github.com/snowy-warmy/tenant_huislijn.git
-https://github.com/snowy-warmy/tenant_der.git
-# (10 sep 2026) Onderstaande twee repo's zijn niet bereikbaar — `git ls-remote`
-# geeft "repository not found" met credentials die de andere drie wel openen.
-# Uitgecommentarieerd zodat een fleet-bump niet halverwege afbreekt. Zet ze
-# terug zodra de repo's bestaan (of corrigeer de naam).
-# https://github.com/snowy-warmy/tenant_energieprestatie.git
-# https://github.com/snowy-warmy/tenant_softbee.git
+#
+# (11 okt 2026) Alle tenant-repo's zijn van `snowy-warmy` naar `dennisreus91`
+# overgezet, net als eerder de runtime, report-api en data-api. GitHub leidt de
+# oude URL's door, dus dit bestand werkte ook ongewijzigd -- maar leun daar
+# niet op: `snowy-warmy/tenant_ov` antwoordt nu al niet meer, terwijl de andere
+# vier het nog doen. Zo'n doorverwijzing vervalt zodra er onder de oude naam
+# opnieuw een repo komt, en dan breekt een fleet-bump precies op het moment dat
+# je hem nodig hebt.
+#
+# Twee tenants ontbraken hier en werden daardoor STIL overgeslagen bij elke
+# bump -- geen foutmelding, ze bleven gewoon op een oude runtime staan:
+#   - tenant_ov stond er helemaal niet in
+#   - tenant_softbee was uitgecommentarieerd als "niet bereikbaar" (zie de oude
+#     notitie van 10 sep). Onder `dennisreus91` bestaat hij wel; nagegaan met
+#     `git ls-remote` op 11 okt 2026.
+# Beide staan nu in de lijst.
+https://github.com/dennisreus91/tenant_woonwijzerwinkel.git
+https://github.com/dennisreus91/tenant_huislijn.git
+https://github.com/dennisreus91/tenant_der.git
+https://github.com/dennisreus91/tenant_ov.git
+https://github.com/dennisreus91/tenant_softbee.git
+# tenant_energieprestatie stond hier uitgecommentarieerd sinds 10 sep 2026.
+# Die repo bestaat onder geen van beide accounts (nagegaan 11 okt 2026), dus de
+# regel is verwijderd in plaats van meeverhuisd. Komt hij er ooit, voeg hem dan
+# gewoon toe.

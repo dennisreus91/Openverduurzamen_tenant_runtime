@@ -31,9 +31,11 @@
 # fleet-bump op het moment dat je hem nodig hebt. Daarom staat de eigenaar
 # hier nu uitgeschreven.
 #
-# De TENANT-repo's zijn NIET meegegaan: die staan nog onder `snowy-warmy`, en
-# tenants.txt hoort dus snowy-warmy-URL's te houden. Nagegaan op 8 okt 2026
-# met `git ls-remote`: onder dennisreus91 bestaan ze niet.
+# (11 okt 2026) Inmiddels zijn ook de TENANT-repo's overgezet, dus tenants.txt
+# staat nu volledig op `dennisreus91`. Nagegaan met `git ls-remote`: alle vijf
+# bestaan daar, en de oude URL's zijn doorverwijzingen naar diezelfde repo
+# (gelijke HEAD aan beide kanten). Op die doorverwijzing valt niet te bouwen --
+# `snowy-warmy/tenant_ov` antwoordt nu al niet meer.
 
 set -euo pipefail
 
