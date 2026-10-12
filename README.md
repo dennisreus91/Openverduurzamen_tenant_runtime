@@ -79,5 +79,6 @@ See `tenant-woonwijzerwinkel/tenant.config.js` for a fully-populated example.
 - `FULL_APP_RENDER_URL`
 - `FULL_APP_RENDER_API_KEY`
 - `FULL_HANDOFF_API_KEY` (optional, required if Mid is doing handoffs)
+- `PARTNER_ORDER_API_KEY` (optional) — turns on `POST /api/partner/full/order`: the full report without payment, ordered server-to-server by the tenant's own service (e.g. the WoonWijzerWinkel chat adviser). Body `{ email, address:{postalcode,housenumber,houseaddition}, confirmed_data, source, request_id }`, header `x-api-key`. Counts in the same monthly quota as `/intern`. Unset = 503.
 - `ADMIN_API_KEY`
 - `ORDERS_DATA_DIR=/var/data` (mount Render disk here)

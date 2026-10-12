@@ -635,7 +635,7 @@ export function createTenantApp(config) {
    * existing processOrderById flow immediately runs render → PDF →
    * mail. Used by /api/internal/full/render for WoonWijzerWinkel staff.
    */
-  async function createInternalOrder({ req, email, address, confirmedData, sourceMeta = null }) {
+  async function createInternalOrder({ req, email, address, confirmedData, sourceMeta = null, source = "internal_full_start" }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const downloadToken = newOrderToken();
@@ -667,7 +667,7 @@ export function createTenantApp(config) {
       error: "",
       source_meta: {
         ...(sourceMeta || {}),
-        source: "internal_full_start",
+        source,
         internal_user: req?.internalSession?.email || null,
         month_usage_after: monthUsage,
       },
@@ -1074,6 +1074,42 @@ export function createTenantApp(config) {
       const payload = await createInternalOrder({
         req, email, address, confirmedData,
         sourceMeta: { tenant_id: config.id, request_id: String(req.body?.request_id || "").trim() },
+      });
+      return res.json(payload);
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  // POST /api/partner/full/order — het volledige rapport zonder betaalstap,
+  // aangevraagd door een eigen dienst van de tenant (de chatadviseur van
+  // WoonWijzerWinkel), server-to-server. Zelfde pijplijn als de interne
+  // aanvraag: order op "paid", render, PDF, mail naar de klant, en het telt
+  // mee in hetzelfde maandquotum. Uit zolang PARTNER_ORDER_API_KEY leeg is:
+  // een route zonder betaling mag nooit per ongeluk open staan.
+  app.post("/api/partner/full/order", async (req, res) => {
+    const key = String(process.env.PARTNER_ORDER_API_KEY || "").trim();
+    if (!key) return res.status(503).json({ error: "Rapportaanvraag zonder betaling staat uit voor deze tenant." });
+    if (String(req.header("x-api-key") || "").trim() !== key) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const address = normalizeAddressInput(req.body?.address || {});
+      const email = String(req.body?.email || "").trim();
+      const confirmedData = normalizeConfirmedDataInput(req.body?.confirmed_data || {});
+      const errors = {};
+      if (!validateEmail(email)) errors.email = "Geldig e-mailadres is verplicht.";
+      if (!address.postalcode) errors.postalcode = "Postcode is verplicht.";
+      if (!address.housenumber) errors.housenumber = "Huisnummer is verplicht.";
+      Object.assign(errors, validateConfirmedDataBasic(confirmedData));
+      if (Object.keys(errors).length) return res.status(400).json({ error: "Ongeldige invoer.", field_errors: errors });
+
+      const payload = await createInternalOrder({
+        req, email, address, confirmedData,
+        source: "partner_api",
+        sourceMeta: {
+          tenant_id: config.id,
+          request_id: String(req.body?.request_id || "").trim(),
+          partner_source: String(req.body?.source || "").trim().slice(0, 64) || null,
+        },
       });
       return res.json(payload);
     } catch (e) {
