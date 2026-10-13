@@ -20,16 +20,23 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { bestellingPayload, centraalAan, kiesTeMelden, meldBestelling } from "../lib/centraal.js";
 
+// Zoals createOrder() hem werkelijk wegschrijft. Let op wat er NIET in staat:
+// geen `download_url`. Dat veld bestaat alleen in buildOrderPublicView, en
+// daar als relatief pad. De eerste versie van deze test zette het er wel in,
+// en bevestigde daarmee een aanname die in productie niet opgaat.
 const ORDER = {
   id: "ord_123",
+  tenant_id: "deenergieraadgever",
+  download_token: "geheimtoken",
+  status: "mailed",
   email: "bewoner@example.com",
   amount_eur: 30,
-  payment: { id: "tr_abc123" },
-  download_url: "https://deenergieraadgever.openverduurzamen.nl/r/ord_123?t=geheim",
+  payment: { id: "tr_abc123", status: "paid" },
   address: { postalcode: "5654PM", housenumber: "373" },
   confirmed_data: { soort_woning: "tussenwoning" },
   source_meta: { source: "internal_full_start" },
 };
+const BASIS_AAN = { APP_BASE_URL: "https://deenergieraadgever.openverduurzamen.nl" };
 const CONFIG = { id: "deenergieraadgever" };
 
 /**
@@ -106,13 +113,21 @@ test("zonder url of sleutel doet de koppeling niets", () => {
 });
 
 test("de verzoekvorm volgt het contract van de agent-API", () => {
+  const oud = process.env.APP_BASE_URL;
+  process.env.APP_BASE_URL = BASIS_AAN.APP_BASE_URL;
   const p = bestellingPayload(ORDER, CONFIG);
+  if (oud === undefined) delete process.env.APP_BASE_URL;
+  else process.env.APP_BASE_URL = oud;
   assert.equal(p.bedrag, "30.00", "bedrag als tekst met twee decimalen");
   assert.equal(p.valuta, "EUR");
   assert.equal("status" in p, false, "de status mag bij het aanmaken alleen aangemaakt zijn");
   assert.equal(p.klant.email, "bewoner@example.com");
   assert.equal(p.mollie_payment_id, "tr_abc123");
-  assert.match(p.rapportlocatie, /^https:\/\//, "een verwijzing, geen bestand");
+  assert.equal(
+    p.rapportlocatie,
+    "https://deenergieraadgever.openverduurzamen.nl/r/ord_123?t=geheimtoken",
+    "dezelfde link als in de mail, zelf opgebouwd",
+  );
   assert.equal(p.invoer.order_id, "ord_123");
   // Agent en partner komen uit de sleutel, nooit uit de body.
   assert.equal("agent" in p, false);
@@ -241,4 +256,41 @@ test("oudste eerst, en hoogstens een hap per ronde", () => {
 test("geen lijst, geen ronde", () => {
   assert.deepEqual(kiesTeMelden(undefined), []);
   assert.deepEqual(kiesTeMelden(bestellingen(5), 0), []);
+});
+
+// ── De downloadlink ─────────────────────────────────────────────────────────
+
+test("zonder APP_BASE_URL gaat er geen rapportlocatie mee", () => {
+  const oud = process.env.APP_BASE_URL;
+  delete process.env.APP_BASE_URL;
+  try {
+    assert.equal("rapportlocatie" in bestellingPayload(ORDER, CONFIG), false);
+  } finally {
+    if (oud !== undefined) process.env.APP_BASE_URL = oud;
+  }
+});
+
+test("een http-basis gaat niet mee, want de gateway eist https", () => {
+  // Weglaten is beter dan de hele bestelling laten stranden op een 400 om een
+  // veld dat mag ontbreken. Dit raakt lokaal draaien, niet productie.
+  const oud = process.env.APP_BASE_URL;
+  process.env.APP_BASE_URL = "http://localhost:3000";
+  try {
+    assert.equal("rapportlocatie" in bestellingPayload(ORDER, CONFIG), false);
+  } finally {
+    if (oud === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = oud;
+  }
+});
+
+test("een order zonder token levert geen halve link op", () => {
+  const oud = process.env.APP_BASE_URL;
+  process.env.APP_BASE_URL = BASIS_AAN.APP_BASE_URL;
+  try {
+    const { download_token, ...zonder } = ORDER;
+    assert.equal("rapportlocatie" in bestellingPayload(zonder, CONFIG), false);
+  } finally {
+    if (oud === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = oud;
+  }
 });
