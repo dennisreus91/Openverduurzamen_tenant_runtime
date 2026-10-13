@@ -51,14 +51,25 @@ async function nepGateway({ vanaf = null } = {}) {
         res.end(JSON.stringify(data));
       };
       if (req.url === "/api/v1/bestellingen") {
-        stand = vanaf || json?.status || "aangemaakt";
+        // Zoals de echte sinds 13 okt 2026: een bestelling begint altijd als
+        // `aangemaakt`, elke andere status is een 400.
+        if (json?.status && json.status !== "aangemaakt") {
+          return antwoord(400, {
+            fout: "ongeldige_invoer",
+            fouten: { status: "alleen aangemaakt; verder via POST /api/v1/bestellingen/<id>/<actie>" },
+          });
+        }
+        stand = vanaf || "aangemaakt";
         return antwoord(201, { id: 42, status: stand, bedrag: json?.bedrag, product: json?.product });
       }
       const m = req.url.match(/^\/api\/v1\/bestellingen\/(\d+)\/(.+)$/);
       if (!m) return antwoord(404, { fout: "niet_gevonden" });
       const actie = m[2];
       let gelukt = false;
-      if (actie === "start-poging" && stand === "betaald") {
+      if (actie === "bevestig" && (stand === "aangemaakt" || stand === "betaald")) {
+        stand = "betaald";
+        gelukt = true;
+      } else if (actie === "start-poging" && stand === "betaald") {
         stand = "in_behandeling";
         gelukt = true;
       } else if (actie === "lever" && stand === "in_behandeling") {
@@ -98,7 +109,7 @@ test("de verzoekvorm volgt het contract van de agent-API", () => {
   const p = bestellingPayload(ORDER, CONFIG);
   assert.equal(p.bedrag, "30.00", "bedrag als tekst met twee decimalen");
   assert.equal(p.valuta, "EUR");
-  assert.equal(p.status, "betaald", "we melden pas na de oplevering");
+  assert.equal("status" in p, false, "de status mag bij het aanmaken alleen aangemaakt zijn");
   assert.equal(p.klant.email, "bewoner@example.com");
   assert.equal(p.mollie_payment_id, "tr_abc123");
   assert.match(p.rapportlocatie, /^https:\/\//, "een verwijzing, geen bestand");
@@ -111,7 +122,7 @@ test("de verzoekvorm volgt het contract van de agent-API", () => {
 test("een gratis rapport meldt een bedrag van nul, geen lege waarde", () => {
   const p = bestellingPayload({ ...ORDER, amount_eur: 0, payment: { id: null } }, CONFIG);
   assert.equal(p.bedrag, "0.00");
-  assert.equal(p.status, "betaald", "ook een gratis rapport wacht nergens meer op");
+  assert.equal("status" in p, false);
   assert.equal("mollie_payment_id" in p, false, "geen Mollie-id bij een gratis rapport");
 });
 
@@ -132,7 +143,12 @@ test("een geslaagde melding loopt de hele route na en levert echt op", async (t)
   assert.equal(uit.status_bijgewerkt, true);
   assert.deepEqual(
     g.ontvangen.map((o) => o.pad),
-    ["/api/v1/bestellingen", "/api/v1/bestellingen/42/start-poging", "/api/v1/bestellingen/42/lever"],
+    [
+      "/api/v1/bestellingen",
+      "/api/v1/bestellingen/42/bevestig",
+      "/api/v1/bestellingen/42/start-poging",
+      "/api/v1/bestellingen/42/lever",
+    ],
   );
   assert.equal(g.stand(), "geleverd", "de bestelling staat daar ook werkelijk op geleverd");
   assert.match(g.ontvangen[0].auth, /^Bearer /);
@@ -142,12 +158,12 @@ test("een geweigerde overgang telt niet als opgeleverd, ook al is het een 200", 
   // Dit is de regressie waar de eerste versie in liep: /<id>/<actie> antwoordt
   // 200 met gelukt:false als de stap niet mag. Wie naar de http-status kijkt,
   // boekt een levering die niet gebeurd is.
-  const g = await nepGateway({ vanaf: "aangemaakt" });
+  const g = await nepGateway({ vanaf: "geannuleerd" });
   t.after(g.close);
   const uit = await metOmgeving(AAN(g.url), () => meldBestelling(ORDER, CONFIG));
   assert.equal(uit.gemeld, true, "de bestelling staat er wel in");
   assert.equal(uit.status_bijgewerkt, false);
-  assert.equal(uit.geweigerd_bij, "start-poging");
+  assert.equal(uit.geweigerd_bij, "bevestig");
   assert.notEqual(g.stand(), "geleverd");
 });
 
