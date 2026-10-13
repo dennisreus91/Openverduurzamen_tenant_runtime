@@ -778,7 +778,13 @@ export function createTenantApp(config) {
     const uit = await meldBestelling(order, config);
     if (uit.gemeld) {
       updateOrder(order.id, { centraal_gemeld_at: nowIso(), centraal_id: uit.id ?? null, centraal_fout: "" });
-      appendStep(order.id, "centraal_gemeld", { id: uit.id ?? null, status_bijgewerkt: uit.status_bijgewerkt !== false });
+      appendStep(order.id, "centraal_gemeld", {
+        id: uit.id ?? null,
+        status_bijgewerkt: uit.status_bijgewerkt !== false,
+        // Staat de bestelling er wel in maar liep een overgang vast, dan is
+        // dat hier te zien. Zonder dit blijft "gemeld" een half verhaal.
+        ...(uit.geweigerd_bij ? { geweigerd_bij: uit.geweigerd_bij, stand: uit.stand ?? null } : {}),
+      });
       return;
     }
     // Wel vastleggen waarom, want de gateway noemt in zijn afwijzing de
