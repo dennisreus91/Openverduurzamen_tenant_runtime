@@ -38,6 +38,7 @@ import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
+import { centraalAan, meldBestelling } from "./lib/centraal.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
@@ -141,68 +142,65 @@ function validateConfirmedDataBasic(data = {}) {
   return errors;
 }
 
-function normalizeConfirmedDataInput(data = {}) {
-  const pvAantal = Number(data.solar_panels_count);
-  const pvIngevuld =
-    data.solar_panels_count !== undefined &&
-    data.solar_panels_count !== null &&
-    String(data.solar_panels_count).trim() !== "" &&
-    Number.isFinite(pvAantal);
+// Grenzen op publiek bereikbare invoer. confirmed_data komt uit een formulier
+// en belandt ook op de order, dus het mag niet onbeperkt groeien. Ruim boven
+// wat het formulier stuurt (elf velden), zodat een nieuw veld er vanzelf
+// doorheen komt.
+const MAX_CONFIRMED_VELDEN = 40;
+const MAX_CONFIRMED_TEKST = 200;
+const MAX_CONFIRMED_LIJST = 50;
 
-  return {
-    soort_woning: String(data.soort_woning || "").trim(),
-    // De ligging van een appartement bepaalt of vloer en dak warmte naar
-    // buiten verliezen (NTA 8800, 8.5) -- bij een tussenverdieping grenzen
-    // beide aan een andere woning. Het snelle rapport kreeg dit veld al mee
-    // (die route geeft de body ongewijzigd door), maar het volledige rapport
-    // loopt langs deze witte lijst en kreeg het nooit. Dezelfde woning werd
-    // daardoor twee keer anders doorgerekend, zonder dat er iets faalde.
-    // Alleen meesturen als er een waarde is, zodat een order zonder dit veld
-    // exact dezelfde confirmed_data houdt.
-    ...(String(data.ligging_appartement || "").trim()
-      ? { ligging_appartement: String(data.ligging_appartement).trim() }
-      : {}),
-    build_year: Number(data.build_year),
-    floor_area_m2: Number(data.floor_area_m2),
-    energy_label: String(data.energy_label || "").trim(),
-    ventilation_type: String(data.ventilation_type || "").trim(),
-    heating_supply: String(data.heating_supply || "").trim(),
-    heat_distribution: String(data.heat_distribution || "").trim(),
-    existing_measures: Array.from(new Set(
-      Array.isArray(data.existing_measures)
-        ? data.existing_measures.map((x) => String(x || "").trim()).filter(Boolean)
-        : []
-    )),
-    // Het doel van de verduurzaming, zoals de klant het in het formulier
-    // koos: laagste investering, kortste terugverdientijd of hoogste
-    // rendement. De report-api kiest daarop de drie scenario's.
-    //
-    // Deze lijst is een witte lijst: wat er niet in staat, valt weg. Zonder
-    // deze regel kwam het doel wel in het snelle rapport (die route geeft de
-    // body ongewijzigd door) maar niet in het volledige rapport, dat via de
-    // orderflow loopt. Dan kreeg dezelfde woning twee rapporten met andere
-    // pakketten -- precies wat we deze week uit de rekenkern hebben gehaald.
-    //
-    // Een tenant die dit veld niet stuurt, stuurt een lege string en krijgt
-    // exact het rapport van voorheen; de report-api negeert een onbekende of
-    // lege waarde.
-    // Alleen meesturen als er een keuze is: een order zonder dit veld houdt
-    // dan exact dezelfde confirmed_data als voorheen. Zo staat het ook op
-    // release/der-report, de tak waar de DER-releases van komen.
-    ...(String(data.verduurzamingsdoel || "").trim()
-      ? { verduurzamingsdoel: String(data.verduurzamingsdoel).trim() }
-      : {}),
-    // Aantal zonnepanelen: optioneel, uit het formulier. Geen enkele open bron
-    // kent het werkelijke aantal per adres, dus het moet van de klant komen.
-    // Alleen doorgeven als het er is, zodat orders zonder dit veld exact
-    // dezelfde confirmed_data houden. De report-api valideert het verder
-    // (1 tot 500, alleen bij aangevinkte zonnepanelen).
-    //
-    // Deze lijst is handmatig: een veld dat hier ontbreekt, komt voor het
-    // volledige rapport nooit aan, zonder dat er iets faalt. Het snelle rapport
-    // (/api/mid/stream) stuurt de body wel ongewijzigd door.
-    ...(pvIngevuld ? { solar_panels_count: pvAantal } : {}),
-  };
+/**
+ * confirmed_data klaarmaken voor de report-api en voor de order.
+ *
+ * WAAROM HIER GEEN EIGEN LIJST MEER STAAT
+ * Dit was een handmatige witte lijst, en de kop van
+ * test/confirmed_data_doorgifte.test.js legt uit waarom dat misging: wat er
+ * niet in stond viel stil weg. Het snelle rapport geeft de body ongewijzigd
+ * door, het volledige loopt langs deze functie -- dus kreeg dezelfde woning
+ * twee rapporten die van elkaar verschilden. Twee keer gerepareerd door een
+ * veld toe te voegen, ligging_appartement en verduurzamingsdoel, en beide
+ * keren pas nadat het verschil al in rapporten zat.
+ *
+ * Een tweede lijst bijhouden is de fout; de beste manier om twee lijsten
+ * synchroon te houden is er één hebben. De report-api bepaalt welke velden
+ * bestaan en welke waarden mogen: validateConfirmedData() toetst tegen
+ * lib/allowed.js, normaliseert bouwjaar en oppervlak, ontdubbelt de
+ * maatregelen, en wijst af met veldfouten. Een veld dat daar bij komt
+ * bereikt het volledige rapport nu vanzelf, en een onbekend veld geeft een
+ * 400 in plaats van stilte.
+ *
+ * Wat hier overblijft is wat déze kant nodig heeft en de report-api niet kan
+ * weten: het is publiek bereikbare invoer die ook bewaard wordt, dus begrensd
+ * in aantal en omvang. Verder niets interpreteren.
+ */
+function normalizeConfirmedDataInput(data = {}) {
+  const uit = {};
+  let velden = 0;
+  for (const [sleutel, waarde] of Object.entries(data || {})) {
+    if (waarde === null || waarde === undefined || waarde === "") continue;
+    if (++velden > MAX_CONFIRMED_VELDEN) break;
+    if (Array.isArray(waarde)) {
+      const lijst = Array.from(
+        new Set(waarde.filter((x) => typeof x === "string" || typeof x === "number").map((x) => String(x).trim().slice(0, MAX_CONFIRMED_TEKST))),
+      ).filter(Boolean);
+      if (lijst.length) uit[sleutel] = lijst.slice(0, MAX_CONFIRMED_LIJST);
+      continue;
+    }
+    if (typeof waarde === "object") continue;
+    if (typeof waarde === "number" || typeof waarde === "boolean") {
+      uit[sleutel] = waarde;
+      continue;
+    }
+    const tekst = String(waarde).trim().slice(0, MAX_CONFIRMED_TEKST);
+    if (!tekst) continue;
+    // Een formulier levert getallen als tekst aan ("10"). Dat als getal
+    // bewaren houdt de order leesbaar, en het is typewerk zonder kennis van
+    // veldnamen -- precies wat hier wél thuishoort. Alleen als de tekst
+    // exact terugkomt, zodat "007" een string blijft en geen 7 wordt.
+    uit[sleutel] = String(Number(tekst)) === tekst ? Number(tekst) : tekst;
+  }
+  return uit;
 }
 
 // ---------------------------------------------------------------------------
@@ -768,9 +766,36 @@ export function createTenantApp(config) {
     setTimeout(async () => { try { await processOrderById(orderId); } catch {} }, 50);
   }
 
+  /**
+   * De bestelling melden bij de centrale database, na de oplevering.
+   *
+   * Gooit niet en blokkeert niets: de administratie mag de klant niet raken.
+   * Lukt het niet, dan blijft centraal_gemeld_at leeg en pikt de herstelronde
+   * hem later op -- dezelfde ronde die ook een vastgelopen render oppakt.
+   */
+  async function meldAanCentraal(order) {
+    if (!centraalAan() || !order?.id || order.centraal_gemeld_at) return;
+    const uit = await meldBestelling(order, config);
+    if (uit.gemeld) {
+      updateOrder(order.id, { centraal_gemeld_at: nowIso(), centraal_id: uit.id ?? null, centraal_fout: "" });
+      appendStep(order.id, "centraal_gemeld", { id: uit.id ?? null, status_bijgewerkt: uit.status_bijgewerkt !== false });
+      return;
+    }
+    // Wel vastleggen waarom, want de gateway noemt in zijn afwijzing de
+    // toegestane waarden -- dat is de snelste weg naar een juiste koppeling.
+    updateOrder(order.id, { centraal_fout: `${uit.reden}${uit.fouten ? `: ${JSON.stringify(uit.fouten).slice(0, 300)}` : ""}` });
+    appendStep(order.id, "centraal_mislukt", { reden: uit.reden });
+  }
+
   async function recoverPendingOrders() {
     const candidates = listOrders(200).filter((o) => isRecoverableStatus(o.status) && !o.processing_lock);
     for (const order of candidates) triggerBackgroundProcessing(order.id);
+    // Opgeleverde bestellingen die de centrale database nog niet kent. Dit is
+    // de wachtrij die het doorsturen losmaakt van het bestelpad: een storing
+    // bij de administratie kost hooguit vertraging, geen bestelling.
+    if (!centraalAan()) return;
+    const teMelden = listOrders(200).filter((o) => o.status === "mailed" && !o.centraal_gemeld_at);
+    for (const order of teMelden) await meldAanCentraal(order);
   }
 
   // PDF retention cleanup. Walks every order, deletes the PDF file
@@ -932,6 +957,7 @@ export function createTenantApp(config) {
 
       order = updateOrder(orderId, { status: "mailed", mailed_at: nowIso(), processing_lock: false, last_step: "mail_done", error: "" });
       appendStep(orderId, "mail_done", { to: order.email });
+      await meldAanCentraal(order);
       return order;
     } catch (e) {
       const current = getOrderById(orderId);
