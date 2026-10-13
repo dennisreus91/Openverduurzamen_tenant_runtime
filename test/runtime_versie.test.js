@@ -257,6 +257,40 @@ test("/health meldt de runtime, zodat je van buiten kunt zien wat er draait", as
       assert.ok(veld in body.runtime, `${veld} ontbreekt in het runtime-blok`);
     }
     assert.ok(["pin", "package.json", "onbekend"].includes(body.runtime.bron));
+    // Zonder CENTRAAL_API_URL/_SLEUTEL staat de koppeling uit, en dat moet
+    // als `false` in beeld komen in plaats van te ontbreken -- zie hieronder.
+    assert.equal(body.centraal, false);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test("/health zegt of de koppeling met de centrale database aan staat", async (t) => {
+  // Van buitenaf was niet te zien of een tenant zijn bestellingen doorgeeft.
+  // "Er kwam niets binnen" kan dan twee dingen betekenen -- er was niets, of
+  // de sleutel ontbreekt -- en dat verschil merk je anders pas als er een
+  // bestelling mist.
+  const oud = { url: process.env.CENTRAAL_API_URL, sleutel: process.env.CENTRAAL_API_SLEUTEL };
+  process.env.CENTRAAL_API_URL = "https://centraal.example";
+  process.env.CENTRAAL_API_SLEUTEL = "x".repeat(40);
+  t.after(() => {
+    if (oud.url === undefined) delete process.env.CENTRAAL_API_URL;
+    else process.env.CENTRAAL_API_URL = oud.url;
+    if (oud.sleutel === undefined) delete process.env.CENTRAAL_API_SLEUTEL;
+    else process.env.CENTRAAL_API_SLEUTEL = oud.sleutel;
+  });
+
+  const app = createTenantApp({ id: "testtenant", brand: { name: "Test" } });
+  const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${server.address().port}/health`)).json();
+    assert.equal(body.centraal, true);
+    const ruw = JSON.stringify(body);
+    assert.equal(ruw.includes("x".repeat(40)), false, "de sleutel zelf hoort hier nooit in");
+    assert.equal(ruw.includes("centraal.example"), false, "en de url evenmin");
   } finally {
     server.closeAllConnections?.();
     await new Promise((r) => server.close(r));

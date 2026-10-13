@@ -1161,8 +1161,13 @@ export function createTenantApp(config) {
   // bleef draaien. `tag` komt uit de werkelijk geïnstalleerde pin, niet uit
   // het `version`-veld -- zie lib/runtime_versie.js voor waarom dat verschil
   // uitmaakt.
+  // `centraal` zegt alleen of de koppeling met de centrale database aan staat
+  // (url én sleutel gezet), niet welke. Zonder dit is van buitenaf niet te zien
+  // of een tenant zijn bestellingen doorgeeft: het verschil tussen "meldt
+  // niets want er was niets" en "meldt niets want hij staat uit" is anders pas
+  // zichtbaar als er een bestelling misgaat.
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, tenant: config.id, ts: nowIso(), runtime: runtimeVersie() })
+    res.json({ ok: true, tenant: config.id, ts: nowIso(), runtime: runtimeVersie(), centraal: centraalAan() })
   );
 
   // Public brand info — useful for frontends that want to render the
