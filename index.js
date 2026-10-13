@@ -38,6 +38,7 @@ import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
+import { centraalAan, meldBestelling } from "./lib/centraal.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
@@ -765,9 +766,36 @@ export function createTenantApp(config) {
     setTimeout(async () => { try { await processOrderById(orderId); } catch {} }, 50);
   }
 
+  /**
+   * De bestelling melden bij de centrale database, na de oplevering.
+   *
+   * Gooit niet en blokkeert niets: de administratie mag de klant niet raken.
+   * Lukt het niet, dan blijft centraal_gemeld_at leeg en pikt de herstelronde
+   * hem later op -- dezelfde ronde die ook een vastgelopen render oppakt.
+   */
+  async function meldAanCentraal(order) {
+    if (!centraalAan() || !order?.id || order.centraal_gemeld_at) return;
+    const uit = await meldBestelling(order, config);
+    if (uit.gemeld) {
+      updateOrder(order.id, { centraal_gemeld_at: nowIso(), centraal_id: uit.id ?? null, centraal_fout: "" });
+      appendStep(order.id, "centraal_gemeld", { id: uit.id ?? null, status_bijgewerkt: uit.status_bijgewerkt !== false });
+      return;
+    }
+    // Wel vastleggen waarom, want de gateway noemt in zijn afwijzing de
+    // toegestane waarden -- dat is de snelste weg naar een juiste koppeling.
+    updateOrder(order.id, { centraal_fout: `${uit.reden}${uit.fouten ? `: ${JSON.stringify(uit.fouten).slice(0, 300)}` : ""}` });
+    appendStep(order.id, "centraal_mislukt", { reden: uit.reden });
+  }
+
   async function recoverPendingOrders() {
     const candidates = listOrders(200).filter((o) => isRecoverableStatus(o.status) && !o.processing_lock);
     for (const order of candidates) triggerBackgroundProcessing(order.id);
+    // Opgeleverde bestellingen die de centrale database nog niet kent. Dit is
+    // de wachtrij die het doorsturen losmaakt van het bestelpad: een storing
+    // bij de administratie kost hooguit vertraging, geen bestelling.
+    if (!centraalAan()) return;
+    const teMelden = listOrders(200).filter((o) => o.status === "mailed" && !o.centraal_gemeld_at);
+    for (const order of teMelden) await meldAanCentraal(order);
   }
 
   // PDF retention cleanup. Walks every order, deletes the PDF file
@@ -929,6 +957,7 @@ export function createTenantApp(config) {
 
       order = updateOrder(orderId, { status: "mailed", mailed_at: nowIso(), processing_lock: false, last_step: "mail_done", error: "" });
       appendStep(orderId, "mail_done", { to: order.email });
+      await meldAanCentraal(order);
       return order;
     } catch (e) {
       const current = getOrderById(orderId);
