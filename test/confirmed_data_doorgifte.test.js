@@ -57,7 +57,18 @@ test("onzin in het doelveld gaat er ongewijzigd door en wordt verderop genegeerd
   assert.equal(uit.verduurzamingsdoel, "iets_anders");
 });
 
-test("de witte lijst laat onbekende velden wel vallen", () => {
+// Omgekeerd sinds 13 oktober 2026. Er is geen witte lijst meer: een veld dat
+// de report-api erbij krijgt, bereikt het volledige rapport vanzelf. Kent hij
+// het niet, dan geeft hij een 400 met een veldfout. Dat is het hele punt --
+// een onbekend veld hoort op te vallen, niet te verdwijnen.
+test("een onbekend veld gaat door; de report-api beslist erover", () => {
   const uit = normalizeConfirmedDataInput({ ...VOLLEDIG, een_veld_dat_niet_bestaat: "x" });
-  assert.equal("een_veld_dat_niet_bestaat" in uit, false);
+  assert.equal(uit.een_veld_dat_niet_bestaat, "x");
+});
+
+test("de invoer blijft begrensd: te veel velden en te lange waarden worden gekapt", () => {
+  const veel = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`veld_${i}`, "x"]));
+  assert.ok(Object.keys(normalizeConfirmedDataInput(veel)).length <= 40, "niet meer dan veertig velden");
+  const lang = normalizeConfirmedDataInput({ soort_woning: "x".repeat(5000) });
+  assert.equal(lang.soort_woning.length, 200);
 });
