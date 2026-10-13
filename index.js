@@ -1030,6 +1030,90 @@ export function createTenantApp(config) {
     res.type("text/html; charset=utf-8").send(html);
   }
 
+  // -------------------------------------------------------------------------
+  // Toegangspoort: de hele tenant achter de adviseurslogin
+  //
+  // Aan te zetten per tenant met `features.toegang: true`. Bedoeld voor een
+  // tenant die nog niet publiek is: De Energie Raadgever wordt voorlopig
+  // alleen door adviseurs bediend, samen met de bewoner.
+  //
+  // HERGEBRUIKT DE BESTAANDE SESSIE
+  // Dezelfde cookie en dezelfde WWW_INTERNAL_*-gegevens als de interne flow.
+  // Een tweede inlogmechanisme ernaast zou twee keer onderhouden moeten
+  // worden en twee keer fout kunnen gaan, voor dezelfde groep mensen.
+  //
+  // FAALT DICHT
+  // Ontbreekt WWW_INTERNAL_SESSION_SECRET, dan tekent getInternalSecret() met
+  // een willekeurige sleutel en verifieert geen enkele cookie. De site staat
+  // dan op slot in plaats van open. Daarom hieronder een waarschuwing bij het
+  // starten: dichtstaan zonder dat iemand kan inloggen is ook stuk.
+  //
+  // WAT OPEN BLIJFT, EN WAAROM
+  // Standaard gaat alles dicht, zodat een nieuwe pagina niet per ongeluk
+  // buiten de poort valt. De uitzonderingen zijn stuk voor stuk dingen die
+  // hun eigen slot hebben of die van buiten moeten blijven werken:
+  //   - /health            toezicht
+  //   - /intern…           de inlogpagina zelf, anders kun je niet naar binnen
+  //   - /assets/…          de loginpagina heeft zijn stijl en logo nodig
+  //   - /api/tenant        merkgegevens die diezelfde pagina ophaalt
+  //   - /api/full/webhook/ Mollie meldt zich server-naar-server, zonder cookie
+  //   - /r/… en /api/full/order/…  de downloadlink van 365 dagen; wie al
+  //                        betaald heeft moet bij zijn rapport kunnen,
+  //                        ook lang nadat de poort dichtging
+  //   - /api/full/handoff…, /api/mid/full-report-handoff, /api/full/prefill/…
+  //                        overdracht van een partner, met een eigen sleutel
+  //                        of een token in het pad
+  //   - /api/epa/, /api/label-pdf/, /api/admin/  eigen sleutel
+  //
+  // LET OP: met de poort aan kan een bezoeker die via een partneroverdracht
+  // binnenkomt de bestelpagina niet laden -- die staat achter de login. Voor
+  // een tenant mét overdrachtspartners (Softbee) hoort deze schakelaar dus
+  // uit te staan.
+  // -------------------------------------------------------------------------
+  const TOEGANG_OPEN = [
+    "/health",
+    "/api/tenant",
+    "/api/internal/login",
+    "/api/internal/logout",
+  ];
+  const TOEGANG_OPEN_PREFIX = [
+    "/intern",
+    "/assets/",
+    "/r/",
+    "/api/full/webhook/",
+    "/api/full/order/",
+    "/api/full/handoff",
+    "/api/full/prefill/",
+    "/api/mid/full-report-handoff",
+    "/api/mid/full-handoff-config",
+    "/api/epa/",
+    "/api/label-pdf/",
+    "/api/admin/",
+  ];
+
+  function toegangAan() {
+    return Boolean(config.features?.toegang);
+  }
+
+  if (toegangAan() && !String(process.env.WWW_INTERNAL_SESSION_SECRET || "").trim()) {
+    console.warn(
+      `[tenant-runtime] LET OP: features.toegang staat aan voor '${config.id}' maar ` +
+      "WWW_INTERNAL_SESSION_SECRET ontbreekt. De site staat dan volledig op slot: " +
+      "inloggen lukt niemand."
+    );
+  }
+
+  app.use((req, res, next) => {
+    if (!toegangAan()) return next();
+    const pad = req.path || "";
+    if (TOEGANG_OPEN.includes(pad)) return next();
+    if (TOEGANG_OPEN_PREFIX.some((p) => pad.startsWith(p))) return next();
+    if (readInternalSession(req)) return next();
+    const wilHtml = String(req.headers.accept || "").includes("text/html");
+    if (wilHtml) return res.redirect("/intern");
+    return res.status(401).json({ error: "Niet ingelogd.", code: "toegang_vereist" });
+  });
+
   // Root route: precedence is onepagerStart → midStart → fullStart. The
   // first template the tenant ships becomes the landing page.
   app.get("/", (req, res) => {
@@ -1167,7 +1251,7 @@ export function createTenantApp(config) {
   // niets want er was niets" en "meldt niets want hij staat uit" is anders pas
   // zichtbaar als er een bestelling misgaat.
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, tenant: config.id, ts: nowIso(), runtime: runtimeVersie(), centraal: centraalAan() })
+    res.json({ ok: true, tenant: config.id, ts: nowIso(), runtime: runtimeVersie(), centraal: centraalAan(), toegang: toegangAan() })
   );
 
   // Public brand info — useful for frontends that want to render the
