@@ -796,7 +796,11 @@ export function createTenantApp(config) {
     // toegestane waarden -- dat is de snelste weg naar een juiste koppeling.
     updateOrder(order.id, { centraal_fout: `${uit.reden}${uit.fouten ? `: ${JSON.stringify(uit.fouten).slice(0, 300)}` : ""}` });
     appendStep(order.id, "centraal_mislukt", { reden: uit.reden });
+    console.warn(`[tenant-runtime] centraal: melden mislukt (${uit.reden}) voor bestelling ${order.id}`);
   }
+
+  // Of de eerste ronde al een regel in het log heeft gezet.
+  let centraalGemeld = false;
 
   async function recoverPendingOrders() {
     const candidates = listOrders(200).filter((o) => isRecoverableStatus(o.status) && !o.processing_lock);
@@ -812,7 +816,22 @@ export function createTenantApp(config) {
     // hele geschiedenis -- en zou voorbij plek 200 nooit meer aan de beurt
     // komen. Niet stil overslaan dus, maar per ronde een hap, zodat een
     // achterstand geleidelijk wegloopt en één ronde niet minutenlang duurt.
-    const teMelden = kiesTeMelden(listOrders(10000), CENTRAAL_PER_RONDE);
+    const alle = listOrders(10000);
+    const teMelden = kiesTeMelden(alle, CENTRAAL_PER_RONDE);
+
+    // Eén regel in het log, want van buiten is niet te zien of er historie
+    // wacht. "Er kwam niets binnen bij de centrale database" kan twee dingen
+    // betekenen -- er was niets, of het melden klemt -- en zonder dit
+    // onderscheid staar je naar een leeg overzicht zonder te weten waarom.
+    // De eerste ronde na het starten meldt zich altijd, ook bij nul; daarna
+    // alleen als er werkelijk iets te doen is. Een aantal, geen gegevens: dit
+    // hoort in het log van de tenant, niet in een openbaar /health.
+    const wachtrij = kiesTeMelden(alle, Number.MAX_SAFE_INTEGER).length;
+    if (!centraalGemeld || wachtrij > 0) {
+      console.log(`[tenant-runtime] centraal: ${wachtrij} bestelling(en) te melden, ${teMelden.length} deze ronde`);
+    }
+    centraalGemeld = true;
+
     for (const order of teMelden) await meldAanCentraal(order);
   }
 
