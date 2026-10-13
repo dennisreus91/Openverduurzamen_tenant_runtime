@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { bestellingPayload, centraalAan, meldBestelling } from "../lib/centraal.js";
+import { bestellingPayload, centraalAan, kiesTeMelden, meldBestelling } from "../lib/centraal.js";
 
 const ORDER = {
   id: "ord_123",
@@ -179,4 +179,50 @@ test("een onbereikbare centrale dienst gooit niet, maar meldt zich netjes", asyn
   const uit = await metOmgeving(AAN("http://127.0.0.1:1"), () => meldBestelling(ORDER, CONFIG));
   assert.equal(uit.gemeld, false);
   assert.ok(["onbereikbaar", "timeout"].includes(uit.reden), uit.reden);
+});
+
+// ── Wie er deze ronde aan de beurt is ────────────────────────────────────────
+
+/** `n` bestellingen, nieuwste eerst, zoals listOrders ze teruggeeft. */
+function bestellingen(n, overschrijf = () => ({})) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `ord_${String(n - i).padStart(4, "0")}`,
+    status: "mailed",
+    created_at: new Date(Date.UTC(2026, 0, 1) + (n - i) * 3600_000).toISOString(),
+    ...overschrijf(i),
+  }));
+}
+
+test("alleen opgeleverde bestellingen die er nog niet in staan", () => {
+  const lijst = [
+    { id: "a", status: "mailed", created_at: "2026-01-01T00:00:00Z" },
+    { id: "b", status: "paid", created_at: "2026-01-02T00:00:00Z" },
+    { id: "c", status: "mailed", created_at: "2026-01-03T00:00:00Z", centraal_gemeld_at: "2026-01-03T01:00:00Z" },
+    null,
+  ];
+  assert.deepEqual(kiesTeMelden(lijst).map((o) => o.id), ["a"]);
+});
+
+test("een oude bestelling voorbij de nieuwste tweehonderd komt wél aan de beurt", () => {
+  // Dit is de regressie: de ronde keek naar listOrders(200), dus bij meer dan
+  // 200 bestellingen was een oude, nog niet gemelde onzichtbaar -- voorgoed.
+  // Precies de bestellingen die bij het aanzetten van de koppeling moeten
+  // worden ingehaald.
+  const lijst = bestellingen(300, (i) => (i === 299 ? {} : { centraal_gemeld_at: "2026-02-01T00:00:00Z" }));
+  const oudste = lijst[299];
+  assert.equal(oudste.centraal_gemeld_at, undefined, "de oudste is de enige ongemelde");
+  assert.deepEqual(kiesTeMelden(lijst).map((o) => o.id), [oudste.id]);
+});
+
+test("oudste eerst, en hoogstens een hap per ronde", () => {
+  const gekozen = kiesTeMelden(bestellingen(60), 25);
+  assert.equal(gekozen.length, 25, "niet alles in één ronde");
+  assert.equal(gekozen[0].id, "ord_0001", "de oudste gaat voor");
+  const tijden = gekozen.map((o) => o.created_at);
+  assert.deepEqual(tijden, [...tijden].sort(), "oplopend in tijd");
+});
+
+test("geen lijst, geen ronde", () => {
+  assert.deepEqual(kiesTeMelden(undefined), []);
+  assert.deepEqual(kiesTeMelden(bestellingen(5), 0), []);
 });

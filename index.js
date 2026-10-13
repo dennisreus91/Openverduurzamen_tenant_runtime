@@ -38,7 +38,7 @@ import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
-import { centraalAan, meldBestelling } from "./lib/centraal.js";
+import { centraalAan, kiesTeMelden, meldBestelling } from "./lib/centraal.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
@@ -50,6 +50,11 @@ import {
 // Long-running fetch dispatcher for the report-api render call.
 // ---------------------------------------------------------------------------
 const LONG_FETCH_HARD_CAP_MS = Number(process.env.FULL_APP_RENDER_TIMEOUT_MS || 1500000);
+
+// Hoeveel bestellingen de herstelronde per keer bij de centrale database
+// meldt. Drie aanroepen per bestelling, dus bij een achterstand loopt een
+// ronde anders vol; de volgende ronde pakt de rest.
+const CENTRAAL_PER_RONDE = Number(process.env.CENTRAAL_PER_RONDE || 25);
 const longFetchAgent = new Agent({
   connect: { timeout: 20000 },
   headersTimeout: 0,
@@ -800,7 +805,14 @@ export function createTenantApp(config) {
     // de wachtrij die het doorsturen losmaakt van het bestelpad: een storing
     // bij de administratie kost hooguit vertraging, geen bestelling.
     if (!centraalAan()) return;
-    const teMelden = listOrders(200).filter((o) => o.status === "mailed" && !o.centraal_gemeld_at);
+    // Hier een ruime schijf, net als bij het opruimen van pdf's, en niet de
+    // 200 nieuwste van hierboven. Die grens hoort bij een vastgelopen render:
+    // dat is altijd iets van vandaag. Een bestelling die de centrale database
+    // nog niet kent kan juist oud zijn -- bij het eerste aanzetten is dat de
+    // hele geschiedenis -- en zou voorbij plek 200 nooit meer aan de beurt
+    // komen. Niet stil overslaan dus, maar per ronde een hap, zodat een
+    // achterstand geleidelijk wegloopt en één ronde niet minutenlang duurt.
+    const teMelden = kiesTeMelden(listOrders(10000), CENTRAAL_PER_RONDE);
     for (const order of teMelden) await meldAanCentraal(order);
   }
 
