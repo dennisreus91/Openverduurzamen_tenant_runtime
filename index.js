@@ -1248,8 +1248,17 @@ export function createTenantApp(config) {
     });
   });
 
+  // De map met middelen van de runtime zelf, voor bestanden die elke tenant
+  // hetzelfde hoort te hebben. Zie assets/contact_modal.js: dat stond in vier
+  // kopieen die uit elkaar liepen.
+  const gedeeldeAssetsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "assets");
+
   app.get("/assets/:filename(*)", (req, res) => {
-    const abs = safeAssetPath(assetsDir, req.params.filename);
+    // De eigen kopie van de tenant wint. Zo verandert er niets voor een tenant
+    // die zijn bestand nog heeft, en kan de overstap er een voor een.
+    const abs =
+      safeAssetPath(assetsDir, req.params.filename) ||
+      safeAssetPath(gedeeldeAssetsDir, req.params.filename);
     if (!abs) return res.status(404).send("Asset not found");
     res.setHeader("Cache-Control", "public, max-age=86400");
     res.sendFile(abs);
@@ -1301,6 +1310,9 @@ export function createTenantApp(config) {
     // Het contactvenster leest de toestemmingstekst hier op, zodat hij niet in vier
     // kopieen van contact_modal.js staat.
     lead: leadToestemming(),
+    // De naam waarmee het contactvenster de adviesaanvraag aankondigt. Stond
+    // hardgecodeerd in de kopie van De Energie Raadgever.
+    adviesPartner: String(config.report?.adviesPartner || config.brand?.name || "").trim(),
     product: { name: config.product?.name || "", priceEur: Number(config.payment?.priceEur || 30) },
   }));
 
