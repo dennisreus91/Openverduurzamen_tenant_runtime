@@ -38,7 +38,7 @@ import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
-import { centraalAan, kiesTeMelden, meldBestelling } from "./lib/centraal.js";
+import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
@@ -1275,10 +1275,32 @@ export function createTenantApp(config) {
 
   // Public brand info — useful for frontends that want to render the
   // current tenant's name/colors without hardcoding them.
+  // De tekst waarmee een bezoeker instemt voordat zijn gegevens als lead naar de
+  // partner gaan. Overgenomen van de WoonWijzerWinkel-adviseur, met de partnernaam
+  // per tenant (keuze Dennis, 14 oktober 2026) -- zo staat er niet bij elke ingang
+  // een eigen formulering.
+  //
+  // `privacyUrl` is optioneel en volgt later: de tools komen op verschillende
+  // websites te staan, dus de verklaring verschilt per tenant. Zonder url blijft de
+  // zin staan en is er alleen geen link.
+  function leadToestemming() {
+    const partner = String(config.brand?.name || "deze partner").trim();
+    return {
+      tekst:
+        `Ik ga ermee akkoord dat ${partner} mijn gegevens en mijn verduurzamingsadvies ` +
+        `ontvangt en contact met mij opneemt over het advies. ${partner} gaat zorgvuldig ` +
+        `met je gegevens om, zie de privacyverklaring.`,
+      privacyUrl: String(config.contact?.privacyUrl || "").trim(),
+    };
+  }
+
   app.get("/api/tenant", (_req, res) => res.json({
     id: config.id,
     brand: config.brand,
     contact: config.contact,
+    // Het contactvenster leest de toestemmingstekst hier op, zodat hij niet in vier
+    // kopieen van contact_modal.js staat.
+    lead: leadToestemming(),
     product: { name: config.product?.name || "", priceEur: Number(config.payment?.priceEur || 30) },
   }));
 
@@ -2139,6 +2161,35 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
           tenant: config.id,
         },
       });
+
+      // En naar de centrale database, maar alleen met toestemming.
+      //
+      // Het formulier stuurt `akkoord: true` zodra het vinkje erin zit. Zolang dat
+      // er niet is blijft de lead gewoon een mail, precies zoals voorheen -- deze
+      // code mag nooit de reden zijn dat er geen lead meer binnenkomt. De melding
+      // gooit niet en blokkeert het antwoord aan de bezoeker niet.
+      const toestemming = leadToestemming();
+      meldLead(
+        {
+          email, firstName, lastName, phone, message, sourcePage,
+          soort: mailOverrides ? "advies_aanvraag" : "contact",
+          // Geen adres: het contactformulier vraagt er niet om, en reportContext
+          // draagt alleen een titel met rijen. Een veld dat altijd leeg is, is
+          // misleidender dan geen veld.
+          mailStatus: "verstuurd",
+          toestemming: body.akkoord === true,
+          toestemmingTekst: toestemming.tekst,
+        },
+        config,
+      )
+        .then((uit) => {
+          if (uit.gemeld) {
+            console.log(`[lead] centraal opgeslagen id=${uit.id ?? "?"}`);
+          } else if (uit.reden !== "centraal_uit" && uit.reden !== "geen_toestemming") {
+            console.warn(`[lead] centraal mislukt (${uit.reden})`);
+          }
+        })
+        .catch(() => {});
 
       return res.json({ ok: true });
     } catch (e) {

@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { bestellingPayload, centraalAan, kiesTeMelden, meldBestelling } from "../lib/centraal.js";
+import { bestellingPayload, centraalAan, kiesTeMelden, leadPayload, meldBestelling, meldLead } from "../lib/centraal.js";
 
 // Zoals createOrder() hem werkelijk wegschrijft. Let op wat er NIET in staat:
 // geen `download_url`. Dat veld bestaat alleen in buildOrderPublicView, en
@@ -57,6 +57,14 @@ async function nepGateway({ vanaf = null } = {}) {
         res.writeHead(code, { "Content-Type": "application/json" });
         res.end(JSON.stringify(data));
       };
+      if (req.url === "/api/v1/leads") {
+        // De echte dienst weigert een lead zonder toestemming; die regel hoort
+        // ook in de nabootsing te staan, anders toetst de test hem nooit.
+        if (json?.toestemming !== true || !String(json?.toestemming_tekst || "").trim()) {
+          return antwoord(400, { fout: "ongeldige_invoer", fouten: { toestemming: "verplicht true" } });
+        }
+        return antwoord(201, { id: 7 });
+      }
       if (req.url === "/api/v1/bestellingen") {
         // Zoals de echte sinds 13 okt 2026: een bestelling begint altijd als
         // `aangemaakt`, elke andere status is een 400.
@@ -293,4 +301,81 @@ test("een order zonder token levert geen halve link op", () => {
     if (oud === undefined) delete process.env.APP_BASE_URL;
     else process.env.APP_BASE_URL = oud;
   }
+});
+
+// ── Leads ───────────────────────────────────────────────────────────────────
+
+const TOESTEMMING =
+  "Ik ga ermee akkoord dat De Energie Raadgever mijn gegevens en mijn verduurzamingsadvies " +
+  "ontvangt en contact met mij opneemt over het advies. De Energie Raadgever gaat zorgvuldig " +
+  "met je gegevens om, zie de privacyverklaring.";
+
+const LEAD = {
+  email: "bewoner@example.nl",
+  firstName: "Jan",
+  lastName: "Jansen",
+  phone: "0612345678",
+  message: "Graag contact over vloerisolatie.",
+  sourcePage: "mid_report",
+  soort: "advies_aanvraag",
+  mailStatus: "verstuurd",
+  toestemming: true,
+  toestemmingTekst: TOESTEMMING,
+};
+
+test("de toestemmingstekst gaat letterlijk mee", () => {
+  const p = leadPayload(LEAD, CONFIG);
+  assert.equal(p.toestemming, true);
+  assert.equal(p.toestemming_tekst, TOESTEMMING, "niet samengevat en niet herschreven");
+});
+
+test("de centrale dienst mailt niet, want de tenant doet dat zelf", () => {
+  // Zou dit true staan, dan krijgt de partner elke lead twee keer.
+  assert.equal(leadPayload(LEAD, CONFIG).mailen, false);
+});
+
+test("de klantgegevens en het kanaal", () => {
+  const p = leadPayload(LEAD, CONFIG);
+  assert.deepEqual(p.klant, {
+    email: "bewoner@example.nl",
+    naam: "Jan Jansen",
+    telefoon: "0612345678",
+  });
+  assert.equal(p.kanaal, "deenergieraadgever-formulier");
+  assert.equal(p.extra.soort, "advies_aanvraag");
+  assert.equal(p.extra.bron, "mid_report");
+});
+
+test("zonder toestemming wordt er niets gemeld", async () => {
+  // Dit is het geval zolang het vinkje nog niet in het formulier zit: de lead
+  // blijft een mail, zoals voorheen. Deze koppeling mag nooit de reden zijn dat
+  // er geen lead meer binnenkomt.
+  const uit = await metOmgeving(AAN("http://127.0.0.1:1"), () =>
+    meldLead({ ...LEAD, toestemming: false }, CONFIG),
+  );
+  assert.equal(uit.gemeld, false);
+  assert.equal(uit.reden, "geen_toestemming");
+});
+
+test("een aangevinkt vakje zonder tekst telt ook niet als toestemming", async () => {
+  const uit = await metOmgeving(AAN("http://127.0.0.1:1"), () =>
+    meldLead({ ...LEAD, toestemmingTekst: "   " }, CONFIG),
+  );
+  assert.equal(uit.reden, "geen_toestemming");
+});
+
+test("een geslaagde lead komt binnen op /api/v1/leads", async (t) => {
+  const g = await nepGateway();
+  t.after(g.close);
+  const uit = await metOmgeving(AAN(g.url), () => meldLead(LEAD, CONFIG));
+  assert.equal(uit.gemeld, true);
+  assert.deepEqual(g.ontvangen.map((o) => o.pad), ["/api/v1/leads"]);
+  assert.equal(g.ontvangen[0].body.toestemming_tekst, TOESTEMMING);
+  assert.match(g.ontvangen[0].auth, /^Bearer /);
+});
+
+test("een onbereikbare dienst gooit niet bij een lead", async () => {
+  const uit = await metOmgeving(AAN("http://127.0.0.1:1"), () => meldLead(LEAD, CONFIG));
+  assert.equal(uit.gemeld, false);
+  assert.ok(["onbereikbaar", "timeout"].includes(uit.reden), uit.reden);
 });
