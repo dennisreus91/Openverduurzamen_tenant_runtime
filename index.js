@@ -248,6 +248,43 @@ export function kiesDownloadLink({ rapportUrl, basisUrl, orderId, downloadToken 
   return `${basis}/r/${orderId}?t=${downloadToken}`;
 }
 
+/**
+ * De bestandsnaam van het rapport in de mail: verduurzamingsrapport-<adres>.pdf
+ *
+ * WAAROM DIT HET ADRES IS
+ * Dit heette `<ordernummer>-<productnaam>.pdf`, bijvoorbeeld
+ * "ord_8f2c1a-volledig-verduurzamingsrapport.pdf". Een ordernummer zegt de
+ * bewoner niets, en wie twee woningen laat doorrekenen houdt twee bestanden
+ * over die hij niet uit elkaar kan houden. De WoonWijzerWinkel-adviseur
+ * noemde zijn pdf al naar het adres; dit trekt de ingangen gelijk
+ * (opmerking Dennis, 15 oktober 2026).
+ *
+ * Het volledige adres komt uit meta.address_line van de report-api ("De
+ * Savornin Lohmanplantsoen 29, 2253VM Voorschoten"). Ontbreekt dat, dan
+ * postcode plus huisnummer uit de bestelling -- genoeg om de woning te
+ * herkennen. Is er helemaal niets, dan "woning": een bestand zonder naam is
+ * erger dan een vage naam.
+ */
+export function rapportBestandsnaam(order, renderMeta = null) {
+  const nummer = [order?.address?.housenumber, order?.address?.houseaddition]
+    .filter(Boolean).map((x) => String(x).trim()).join("");
+  const adres = String(
+    renderMeta?.address_line
+    || order?.address?.addr_line
+    || [order?.address?.postalcode, nummer].filter(Boolean).join(" ")
+    || ""
+  );
+  const slug = adres
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/, "");
+  return `verduurzamingsrapport-${slug || "woning"}.pdf`;
+}
+
 export function createTenantApp(config) {
   if (!config || typeof config !== "object") throw new Error("createTenantApp: config object required");
   if (!config.id) throw new Error("createTenantApp: config.id is required");
@@ -1001,13 +1038,7 @@ export function createTenantApp(config) {
           );
           pdfBuffer = await htmlToPdfBuffer(html);
         }
-        const slug = String(config?.product?.name || "rapport")
-          .toLowerCase()
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "");
-        filename = `${order.id}-${slug}.pdf`;
+        filename = rapportBestandsnaam(order, renderResult.meta);
         pdfPath = path.join(pdfDir, filename);
         fs.writeFileSync(pdfPath, pdfBuffer);
         order = updateOrder(orderId, { status: "pdf_created", pdf_filename: filename, download_path: pdfPath, last_step: "pdf_done" });
