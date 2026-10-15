@@ -228,6 +228,7 @@ export function leesRenderAntwoord(json) {
     pdfBytes: typeof json?.pdf_base64 === "string" && json.pdf_base64
       ? Buffer.from(json.pdf_base64, "base64")
       : null,
+    pdfBestandsnaam: typeof json?.pdf_bestandsnaam === "string" ? json.pdf_bestandsnaam : "",
   };
 }
 
@@ -1038,7 +1039,10 @@ export function createTenantApp(config) {
           );
           pdfBuffer = await htmlToPdfBuffer(html);
         }
-        filename = rapportBestandsnaam(order, renderResult.meta);
+        // De report-api benoemt het bestand; zo heet de bijlage hetzelfde als
+        // wat er achter de downloadlink vandaan komt. Geeft hij geen naam,
+        // dan bepaalt deze tenant hem zelf, met dezelfde regel.
+        filename = renderResult.pdfBestandsnaam || rapportBestandsnaam(order, renderResult.meta);
         pdfPath = path.join(pdfDir, filename);
         fs.writeFileSync(pdfPath, pdfBuffer);
         order = updateOrder(orderId, { status: "pdf_created", pdf_filename: filename, download_path: pdfPath, last_step: "pdf_done" });
@@ -1072,7 +1076,13 @@ export function createTenantApp(config) {
           .filter(Boolean)
           .map((s) => String(s).trim())
           .join("");
-        const addressLine = order.address?.addr_line
+        // De volledige adresregel komt uit de report-api ("Langekamp 9, 3848DX
+        // Harderwijk"); de bestelling kent alleen postcode en huisnummer.
+        // Daardoor stond er in de mail "Adres: 3848DX 9" terwijl het volledige
+        // adres gewoon beschikbaar was -- en de bestandsnaam van de bijlage
+        // gebruikte die bron al wel (eerste echte bestelling, 15 oktober 2026).
+        const addressLine = renderResult.meta?.address_line
+          || order.address?.addr_line
           || [order.address?.postalcode, numberWithAddition]
               .filter(Boolean).join(" ").trim()
           || "";
