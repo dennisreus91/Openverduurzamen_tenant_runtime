@@ -91,3 +91,22 @@ test("een slash te veel in de basis-URL levert geen dubbele slash op", () => {
     "https://example.nl/r/ord_1?t=tok1"
   );
 });
+
+// --- de bestandsnaam uit de report-api --------------------------------------
+
+test("de bestandsnaam van de report-api komt mee", () => {
+  // Zo heet de bijlage hetzelfde als het bestand achter de downloadlink. Bij
+  // de eerste echte bestelling liepen die uiteen: de bijlage droeg het adres,
+  // de download heette "verduurzamingsrapport.pdf".
+  const uit = leesRenderAntwoord({
+    html: "<html/>",
+    pdf_bestandsnaam: "verduurzamingsrapport-langekamp-9-3848dx-harderwijk.pdf",
+  });
+  assert.equal(uit.pdfBestandsnaam, "verduurzamingsrapport-langekamp-9-3848dx-harderwijk.pdf");
+});
+
+test("zonder naam van de report-api blijft het veld leeg", () => {
+  // Dan bepaalt de tenant hem zelf, met dezelfde regel.
+  assert.equal(leesRenderAntwoord({ html: "<html/>" }).pdfBestandsnaam, "");
+  assert.equal(leesRenderAntwoord({ pdf_bestandsnaam: 42 }).pdfBestandsnaam, "");
+});
