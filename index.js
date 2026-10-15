@@ -45,6 +45,8 @@ import {
   incrementInternalQuota,
   readQuotaState,
   getQuotaMax,
+  getDagGebruik,
+  verhoogDagteller,
 } from "./lib/internal_quota.js";
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,10 @@ function templateVars(config, extra = {}) {
     // weigert. Dit is alleen de nette vorm -- een knop die niet werkt hoort er
     // niet te staan.
     LABEL_PDF_UPLOAD: extra.labelPdfUpload === true ? "1" : "",
+    // Idem voor het .epa-bestand van een adviseur (de 0-meting). Zelfde vorm,
+    // zelfde bedoeling: het vak verbergen in plaats van het te tonen en
+    // daarna te laten mislukken.
+    EPA_UPLOAD: extra.epaUpload === true ? "1" : "",
     PRODUCT_NAME: config?.product?.name || "Volledig Verduurzamingsinzicht",
     TERMS_PATH: config?.product?.termsPath || "/algemene-voorwaarden.html",
     ...extra,
@@ -547,6 +553,20 @@ export function createTenantApp(config) {
     return rapportprofiel(config).epaUpload === true;
   }
 
+  /**
+   * Hoeveel volledige rapporten deze tenant op een dag intern mag maken.
+   *
+   * 0 of niet gezet betekent geen plafond -- dan verandert er niets voor de
+   * tenants die dit nooit gevraagd hebben. De maandteller die er al was telt
+   * alleen; hij houdt niets tegen.
+   */
+  function dagplafond() {
+    const env = Number(process.env.INTERN_DAGPLAFOND);
+    if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+    const uit = Number(config.features?.dagplafond);
+    return Number.isFinite(uit) && uit > 0 ? Math.floor(uit) : 0;
+  }
+
   function buildBrandPayload() {
     return {
       id: config.id,
@@ -769,6 +789,7 @@ export function createTenantApp(config) {
     const downloadToken = newOrderToken();
     const redirectPath = config?.product?.redirectAfterPaymentPath || "/full_done.html";
     const monthUsage = incrementInternalQuota(dataDir);
+    const dagGebruik = verhoogDagteller(dataDir);
 
     createOrder({
       id: orderId,
@@ -804,6 +825,7 @@ export function createTenantApp(config) {
         invoer: invoerSoort(sourceMeta?.invoer, epaModel),
         internal_user: req?.internalSession?.email || null,
         month_usage_after: monthUsage,
+        dag_gebruik_na: dagGebruik,
       },
     });
 
@@ -1315,11 +1337,32 @@ export function createTenantApp(config) {
   // POST /api/internal/full/render → cookie-protected, skip Mollie, render+mail
   // GET  /api/internal/quota      → returns { used, max, month, remaining }
 
+  /**
+   * Een tenant met EEN tool in plaats van twee ingangen.
+   *
+   * De interne flow had een eigen intakepagina (/intern/full_start.html) naast
+   * de publieke tool op /. Twee formulieren voor dezelfde woning, die uit
+   * elkaar liepen: de publieke kreeg de upload van een energielabel, het
+   * aantal zonnepanelen en de advertentie erbij, de interne niet.
+   *
+   * Staat deze schakelaar aan, dan is / de enige tool en is /intern nog
+   * uitsluitend de inlogpagina. WoonWijzerWinkel houdt de oude indeling: daar
+   * IS de interne pagina de werkplek van de adviseur, los van de publieke.
+   */
+  function eenToolAan() {
+    return Boolean(config.features?.eenTool);
+  }
+
+  /** Waar een ingelogde adviseur hoort uit te komen. */
+  function naLogin() {
+    return eenToolAan() ? "/" : "/intern/full_start.html";
+  }
+
   app.get("/intern", (req, res) => {
     // If already signed in, skip the login page and go straight to the
     // intake form. The intake page is itself cookie-protected so an
     // expired session bounces back here.
-    if (readInternalSession(req)) return res.redirect("/intern/full_start.html");
+    if (readInternalSession(req)) return res.redirect(naLogin());
     return serveTemplatedPage(req, res, "internLogin", "Interne login niet beschikbaar voor deze tenant.");
   });
 
@@ -1333,9 +1376,12 @@ export function createTenantApp(config) {
   app.get("/intern/login", (req, res) => res.redirect("/intern"));
   app.get("/intern/login.html", (req, res) => res.redirect("/intern"));
 
-  app.get("/intern/full_start.html", requireInternalSession, (req, res) =>
-    serveTemplatedPage(req, res, "internFullStart", "Interne pagina niet beschikbaar voor deze tenant.")
-  );
+  app.get("/intern/full_start.html", requireInternalSession, (req, res) => {
+    // Met een tool bestaat deze pagina niet meer. Een adviseur met een oude
+    // bladwijzer hoort geen 404 te krijgen maar de tool.
+    if (eenToolAan()) return res.redirect("/");
+    return serveTemplatedPage(req, res, "internFullStart", "Interne pagina niet beschikbaar voor deze tenant.");
+  });
 
   app.post("/api/internal/login", (req, res) => {
     const email = String(req.body?.email || "");
@@ -1357,7 +1403,7 @@ export function createTenantApp(config) {
       `${INTERNAL_COOKIE_NAME}=${encodeURIComponent(cookieValue)}; ` +
       `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(INTERNAL_COOKIE_TTL_MS / 1000)}`
     );
-    return res.json({ ok: true, redirect: "/intern/full_start.html" });
+    return res.json({ ok: true, redirect: naLogin() });
   });
 
   app.post("/api/internal/logout", (req, res) => {
@@ -1385,6 +1431,17 @@ export function createTenantApp(config) {
       }
       if (Object.keys(errors).length) return res.status(400).json({ error: "Ongeldige invoer.", field_errors: errors });
 
+      // Het dagplafond. Pas hier, na de veldcontrole: een afgekeurd formulier
+      // hoort geen plek van vandaag op te maken.
+      const plafond = dagplafond();
+      if (plafond > 0 && getDagGebruik(dataDir) >= plafond) {
+        return res.status(429).json({
+          error: `Er zijn vandaag al ${plafond} rapporten aangevraagd. Probeer het morgen opnieuw.`,
+          code: "dagplafond_bereikt",
+          dagplafond: plafond,
+        });
+      }
+
       const payload = await createInternalOrder({
         req, email, address, confirmedData, epaModel,
         sourceMeta: {
@@ -1410,12 +1467,19 @@ export function createTenantApp(config) {
     if (!tokenOk && !sessionOk) return res.status(401).json({ error: "Unauthorized" });
     const state = readQuotaState(dataDir);
     const max = getQuotaMax();
+    const plafond = dagplafond();
     return res.json({
       used: state.current_count,
       max,
       remaining: Math.max(0, max - state.current_count),
       month: state.current_month,
       history: state.history,
+      // Het dagplafond is het enige dat werkelijk iets tegenhoudt; zonder
+      // deze regels is dat nergens af te lezen.
+      dag: new Date().toISOString().slice(0, 10),
+      dag_gebruik: getDagGebruik(dataDir),
+      dagplafond: plafond,
+      dag_resterend: plafond > 0 ? Math.max(0, plafond - getDagGebruik(dataDir)) : null,
     });
   });
 
@@ -1464,7 +1528,11 @@ export function createTenantApp(config) {
   // websites te staan, dus de verklaring verschilt per tenant. Zonder url blijft de
   // zin staan en is er alleen geen link.
   function leadToestemming() {
-    const partner = String(config.brand?.name || "deze partner").trim();
+    // De partij die opvolgt, niet per se de tenant zelf. Bij
+    // OpenVerduurzamen is dat WoonWijzerWinkel: de bezoeker geeft
+    // toestemming om het rapport met HEN door te spreken, en dan hoort die
+    // naam in de zin te staan en niet die van het merk op de pagina.
+    const partner = String(config.report?.adviesPartner || config.brand?.name || "deze partner").trim();
     return {
       tekst:
         `Ik ga ermee akkoord dat ${partner} mijn gegevens en mijn verduurzamingsadvies ` +
