@@ -18,7 +18,10 @@
 #     `git ls-remote` op 11 okt 2026.
 # Beide staan nu in de lijst.
 https://github.com/dennisreus91/tenant_woonwijzerwinkel.git
-https://github.com/dennisreus91/tenant_huislijn.git
+# tenant_huislijn is er op 15 okt 2026 uitgehaald: die tenant is bewust
+# opgeheven (bevestigd door Dennis). De hostnaam lost niet meer op en
+# tenant-huislijn.onrender.com geeft 404. Let op dat de Huislijn-CHAT een
+# andere dienst is en gewoon draait; die hangt niet aan de tenant-runtime.
 https://github.com/dennisreus91/tenant_der.git
 https://github.com/dennisreus91/tenant_ov.git
 https://github.com/dennisreus91/tenant_softbee.git
