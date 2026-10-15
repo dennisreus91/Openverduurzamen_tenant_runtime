@@ -39,6 +39,7 @@ import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
+import { rapportprofiel } from "./lib/rapportprofiel.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
@@ -518,7 +519,11 @@ export function createTenantApp(config) {
     const env = String(process.env.LABEL_PDF_UPLOAD ?? "").trim().toLowerCase();
     if (["1", "true", "ja", "aan", "on", "yes"].includes(env)) return true;
     if (["0", "false", "nee", "uit", "off", "no"].includes(env)) return false;
-    return config?.report?.labelPdfUpload === true;
+    // Via het opgeloste profiel, niet rechtstreeks uit de config: sinds
+    // 14 oktober 2026 staat `labelPdfUpload` in het gedeelde profiel en niet
+    // meer in elke tenantconfig. Deze regel las het veld letterlijk en gaf
+    // daardoor false, waarmee het uploadvak stilletjes verdween.
+    return rapportprofiel(config).labelPdfUpload === true;
   }
 
   function buildBrandPayload() {
