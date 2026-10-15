@@ -211,6 +211,43 @@ function normalizeConfirmedDataInput(data = {}) {
 // ---------------------------------------------------------------------------
 // The factory: build a full Express app from a tenant config object.
 // ---------------------------------------------------------------------------
+/**
+ * Het antwoord van POST /api/full/render uitlezen.
+ *
+ * Sinds de report-api het rapport ook bewaart, staan er twee velden bij:
+ * `rapport_url` (de blijvende downloadlink) en `pdf_base64` (de pdf, zodat
+ * deze tenant hem als bijlage kan versturen zonder zelf PDFBolt te bellen).
+ * Een oudere report-api, of een sleutel zonder partnernaam, stuurt ze niet
+ * mee -- dan blijven ze leeg en valt de verwerking terug op het oude pad.
+ */
+export function leesRenderAntwoord(json) {
+  return {
+    html: json?.html || json?.html_document || "",
+    meta: json?.meta || null,
+    rapportUrl: typeof json?.rapport_url === "string" ? json.rapport_url : "",
+    pdfBytes: typeof json?.pdf_base64 === "string" && json.pdf_base64
+      ? Buffer.from(json.pdf_base64, "base64")
+      : null,
+  };
+}
+
+/**
+ * Welke downloadlink in de mail komt.
+ *
+ * De link van de report-api gaat voor: die overleeft het opschorten of
+ * hernoemen van deze tenant, en de eigen /r/-link niet -- bij twee tenants is
+ * dat al gebeurd. Is er geen centrale link, dan de eigen, zodat de klant
+ * altijd iets krijgt. Is er geen van beide, dan een lege string; het
+ * mailsjabloon laat het blok dan weg.
+ */
+export function kiesDownloadLink({ rapportUrl, basisUrl, orderId, downloadToken }) {
+  const centraal = String(rapportUrl || "").trim();
+  if (/^https:\/\//.test(centraal)) return centraal;
+  const basis = String(basisUrl || "").trim().replace(/\/+$/, "");
+  if (!basis || !orderId || !downloadToken) return "";
+  return `${basis}/r/${orderId}?t=${downloadToken}`;
+}
+
 export function createTenantApp(config) {
   if (!config || typeof config !== "object") throw new Error("createTenantApp: config object required");
   if (!config.id) throw new Error("createTenantApp: config.id is required");
@@ -512,6 +549,14 @@ export function createTenantApp(config) {
       response_mode: "json",
       tenant: buildBrandPayload(),
       generation_options: { enable_photo_analysis: false, enable_web_search: true },
+      // De report-api bewaart het rapport en geeft er een link bij. Op het
+      // bestelnummer, zodat een herpoging na een storing dezelfde link geeft
+      // en er niet opnieuw gerekend wordt.
+      //
+      // Waarom daar en niet hier: een link die aan de hostnaam van deze tenant
+      // hangt sterft zodra de tenant wordt opgeschort of hernoemd, en dat is
+      // bij twee tenants al gebeurd. De report-api is gedeeld en blijft staan.
+      bewaar_rapport: order.id,
     };
     // EPA-driven orders (e.g. Softbee): send the parsed 0-meting so report-api
     // builds the full report from the measured assessment instead of an
@@ -570,7 +615,7 @@ export function createTenantApp(config) {
       err.context = { step: "render_html", http_status: res.status, response_json: json, response_text_preview: String(rawText || "").slice(0, 1200), request_preview: reqBody };
       throw err;
     }
-    return { html, meta: json?.meta || null };
+    return leesRenderAntwoord(json);
   }
 
   function appendStep(orderId, step, extra = {}) {
@@ -919,13 +964,17 @@ export function createTenantApp(config) {
     try {
       appendStep(orderId, "render_html_started");
       const renderResult = order.report_html
-        ? { html: order.report_html, meta: order.full_app_meta || null }
+        ? { html: order.report_html, meta: order.full_app_meta || null,
+            rapportUrl: order.rapport_url || "", pdfBytes: null }
         : await fetchFullReportHtml({ order });
       const html = renderResult.html;
       order = updateOrder(orderId, {
         status: "report_generated",
         report_html: html,
         full_app_meta: renderResult.meta || null,
+        // De link van de report-api bewaren, anders raakt een herpoging hem
+        // kwijt: die hergebruikt de opgeslagen html en doet geen render meer.
+        rapport_url: renderResult.rapportUrl || order.rapport_url || "",
         last_step: "render_html_done",
       });
       appendStep(orderId, "render_html_done", { html_chars: String(html || "").length });
@@ -938,7 +987,20 @@ export function createTenantApp(config) {
         pdfBuffer = fs.readFileSync(pdfPath);
       } else {
         appendStep(orderId, "pdf_started");
-        pdfBuffer = await htmlToPdfBuffer(html);
+        // De report-api maakt de pdf nu zelf en stuurt hem mee. Lukt dat niet
+        // -- een oudere report-api, of een sleutel zonder partnernaam -- dan
+        // valt deze tenant terug op zijn eigen PDFBolt, zodat een betaalde
+        // bestelling nooit blijft hangen op een configuratiefout. Die terugval
+        // logt wel, anders blijft zo'n fout onzichtbaar.
+        if (renderResult.pdfBytes) {
+          pdfBuffer = renderResult.pdfBytes;
+        } else {
+          console.warn(
+            `[tenant-runtime] order ${orderId}: geen pdf van de report-api, terugval op eigen PDFBolt. ` +
+            "Controleer FULL_APP_RENDER_API_KEY en EPA_API_KEYS (zie /api/wie-ben-ik)."
+          );
+          pdfBuffer = await htmlToPdfBuffer(html);
+        }
         const slug = String(config?.product?.name || "rapport")
           .toLowerCase()
           .normalize("NFD")
@@ -959,9 +1021,16 @@ export function createTenantApp(config) {
         // omits the "view online" line. The link points at the short
         // /r/:id alias, which validates the token and streams the PDF.
         const baseUrlConfigured = String(process.env.APP_BASE_URL || "").trim().replace(/\/$/, "");
-        const downloadUrl = baseUrlConfigured && order.download_token
-          ? `${baseUrlConfigured}/r/${order.id}?t=${order.download_token}`
-          : "";
+        // De link van de report-api gaat voor: die overleeft het opschorten of
+        // hernoemen van deze tenant, en de eigen /r/-link niet. Heeft de
+        // report-api er geen gegeven, dan de eigen link, zodat de klant altijd
+        // iets krijgt.
+        const downloadUrl = kiesDownloadLink({
+          rapportUrl: renderResult.rapportUrl,
+          basisUrl: baseUrlConfigured,
+          orderId: order.id,
+          downloadToken: order.download_token,
+        });
         // Build a human-readable address line from whatever fields are
         // present. Tenants can use {{ADDRESS}} in their email template
         // and subject template. Format: "<postcode> <huisnummer><toevoeging>"
