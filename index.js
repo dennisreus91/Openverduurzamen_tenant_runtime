@@ -349,6 +349,9 @@ export function createTenantApp(config) {
   app.use("/api/mid/stream", express.json({ limit: "20mb" }));
   app.use("/api/mid/full-report-handoff", express.json({ limit: "20mb" }));
   app.use("/api/full/handoff", express.json({ limit: "20mb" }));
+  // Een geparste opname is groter dan het gewone formulier; met de standaard
+  // van 5 MB zou een .epa met veel bouwdelen hier op een 413 stuiten.
+  app.use("/api/internal/full/render", express.json({ limit: "20mb" }));
   app.use(express.json({ limit: "5mb" }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -524,6 +527,24 @@ export function createTenantApp(config) {
     // meer in elke tenantconfig. Deze regel las het veld letterlijk en gaf
     // daardoor false, waarmee het uploadvak stilletjes verdween.
     return rapportprofiel(config).labelPdfUpload === true;
+  }
+
+  /**
+   * Of het uploadvak voor een .epa-bestand (de 0-meting van een adviseur) aan
+   * staat. Zelfde vorm als labelPdfAan(), met dezelfde reden: een
+   * omgevingsvariabele die de config overstemt, zodat een ingang binnen een
+   * minuut dicht kan zonder deploy.
+   *
+   * NIET in het gedeelde rapportprofiel. De report-api schermt deze route
+   * niet per tenant af -- Softbee gebruikt haar al zonder vlag -- dus dit is
+   * puur de vraag welk invoervak de tenant toont. Een tenant die hem wil, zet
+   * `report.epaUpload: true` in zijn eigen config.
+   */
+  function epaUploadAan() {
+    const env = String(process.env.EPA_UPLOAD ?? "").trim().toLowerCase();
+    if (["1", "true", "ja", "aan", "on", "yes"].includes(env)) return true;
+    if (["0", "false", "nee", "uit", "off", "no"].includes(env)) return false;
+    return rapportprofiel(config).epaUpload === true;
   }
 
   function buildBrandPayload() {
@@ -709,7 +730,7 @@ export function createTenantApp(config) {
       mailed_at: null,
       processing_lock: false,
       error: "",
-      source_meta: sourceMeta || null,
+      source_meta: { ...(sourceMeta || {}), invoer: invoerSoort(sourceMeta?.source, epaModel) },
     });
 
     return {
@@ -721,12 +742,28 @@ export function createTenantApp(config) {
   }
 
   /**
+   * Waar de woninggegevens van deze bestelling vandaan komen.
+   *
+   * Sinds oktober 2026 zijn dat er drie: een adres (openbare bronnen), een
+   * geupload energielabelrapport en een .epa-opname. Aan de bestelling zelf
+   * was dat niet te zien, en dat is precies wat je wilt weten als een rapport
+   * er vreemd uitziet -- de drie routes voeden de rekenkern verschillend.
+   *
+   * De `source` komt uit de handoff (de frontend zet hem); het model zegt of
+   * er werkelijk een opname bij zat.
+   */
+  function invoerSoort(source, epaModel) {
+    if (!epaModel) return "adres";
+    return String(source || "").trim().toLowerCase() === "label_pdf" ? "label_pdf" : "epa";
+  }
+
+  /**
    * Internal-flow order creation — same as createPaymentOrder but skips
    * Mollie entirely. The order is born with status "paid" so the
    * existing processOrderById flow immediately runs render → PDF →
    * mail. Used by /api/internal/full/render for WoonWijzerWinkel staff.
    */
-  async function createInternalOrder({ req, email, address, confirmedData, sourceMeta = null }) {
+  async function createInternalOrder({ req, email, address, confirmedData, epaModel = null, sourceMeta = null }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const downloadToken = newOrderToken();
@@ -748,6 +785,11 @@ export function createTenantApp(config) {
       email,
       address,
       confirmed_data: confirmedData,
+      // De opname, wanneer de adviseur een .epa of een energielabelrapport
+      // heeft geupload. fetchFullReportHtml() stuurt hem mee naar de
+      // report-api, die dan met de gemeten schil rekent in plaats van met
+      // schattingen uit openbare bronnen.
+      epa_model: epaModel || null,
       payment: { id: null, status: "internal", checkout_url: null },
       report_html: "",
       pdf_filename: "",
@@ -759,6 +801,7 @@ export function createTenantApp(config) {
       source_meta: {
         ...(sourceMeta || {}),
         source: "internal_full_start",
+        invoer: invoerSoort(sourceMeta?.invoer, epaModel),
         internal_user: req?.internalSession?.email || null,
         month_usage_after: monthUsage,
       },
@@ -1160,6 +1203,7 @@ export function createTenantApp(config) {
       // omgevingsoverride daar niet kan zien. Zo blijft er EEN plek die
       // bepaalt of de upload aan staat.
       labelPdfUpload: labelPdfAan(),
+      epaUpload: epaUploadAan(),
     }));
     res.type("text/html; charset=utf-8").send(html);
   }
@@ -1323,19 +1367,31 @@ export function createTenantApp(config) {
 
   app.post("/api/internal/full/render", requireInternalSession, async (req, res) => {
     try {
-      const address = normalizeAddressInput(req.body?.address || req.body || {});
+      const epaModel = req.body?.epa_model && typeof req.body.epa_model === "object" ? req.body.epa_model : null;
+      // Met een opname is het adres van de opname leidend en zijn de
+      // formuliervelden aanvullend -- dezelfde regel als op de publieke
+      // handoff (handleMidHandoff). Zonder deze gelijkschakeling kon een
+      // adviseur een .epa wel in het snelle rapport gebruiken maar niet in
+      // het volledige.
+      const address = normalizeAddressInput(req.body?.address || (epaModel ? epaModel.address : null) || req.body || {});
       const email = String(req.body?.email || "").trim();
       const confirmedData = normalizeConfirmedDataInput(req.body?.confirmed_data || {});
       const errors = {};
       if (!validateEmail(email)) errors.email = "Geldig e-mailadres is verplicht.";
-      if (!address.postalcode) errors.postalcode = "Postcode is verplicht.";
-      if (!address.housenumber) errors.housenumber = "Huisnummer is verplicht.";
-      Object.assign(errors, validateConfirmedDataBasic(confirmedData));
+      if (!epaModel) {
+        if (!address.postalcode) errors.postalcode = "Postcode is verplicht.";
+        if (!address.housenumber) errors.housenumber = "Huisnummer is verplicht.";
+        Object.assign(errors, validateConfirmedDataBasic(confirmedData));
+      }
       if (Object.keys(errors).length) return res.status(400).json({ error: "Ongeldige invoer.", field_errors: errors });
 
       const payload = await createInternalOrder({
-        req, email, address, confirmedData,
-        sourceMeta: { tenant_id: config.id, request_id: String(req.body?.request_id || "").trim() },
+        req, email, address, confirmedData, epaModel,
+        sourceMeta: {
+          tenant_id: config.id,
+          request_id: String(req.body?.request_id || "").trim(),
+          invoer: String(req.body?.source || "").trim(),
+        },
       });
       return res.json(payload);
     } catch (e) {
