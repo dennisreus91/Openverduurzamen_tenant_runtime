@@ -36,3 +36,35 @@ test("het losse rapport verbergt knoppen en de mobiele weergave", () => {
   assert.match(html, /De Energie Raadgever · Horst 36 22/);
   assert.doesNotMatch(losRapportHtml({ adres: "<script>", rapportHtml: "" }), /<script>/);
 });
+
+// --- Wat er gevraagd is, staat in de mail ----------------------------------
+//
+// WAAROM DIT ERBIJ KWAM (16 oktober 2026)
+// De OpenVerduurzamen-tool vraagt onder het snelle rapport het VOLLEDIGE
+// rapport aan, met toestemming om het met de partner door te spreken. Die
+// aanvraag ging als "Aanvraag vrijblijvend advies" de deur uit -- onwaar
+// tegenover de partij die opvolgt, want die belt dan over een adviesgesprek
+// terwijl de klant op een rapport wacht. Gezien bij de eerste proefaanvraag.
+
+test("een aanvraag voor het volledige rapport heet ook zo", () => {
+  const mail = adviesAanvraagMail({
+    config: DER,
+    firstName: "Test",
+    lastName: "Bewoner",
+    adres: "Parkweg 72 G, 2271AM Voorburg",
+    soort: "volledig_rapport",
+  });
+  assert.match(mail.subject, /^Volledig rapport aangevraagd/);
+  assert.equal(mail.heading, "Volledig rapport aangevraagd");
+  assert.match(mail.intro, /volledige verduurzamingsrapport aangevraagd/);
+  assert.match(mail.intro, /toestemming gegeven om het met .* door te spreken/);
+  assert.doesNotMatch(mail.intro, /vrijblijvend advies/);
+});
+
+test("zonder die waarde blijft het de adviesaanvraag die het was", () => {
+  for (const soort of [undefined, "", "advies"]) {
+    const mail = adviesAanvraagMail({ config: DER, firstName: "Test", lastName: "Bewoner", adres: "X", ...(soort === undefined ? {} : { soort }) });
+    assert.match(mail.subject, /^Aanvraag vrijblijvend advies/, JSON.stringify(soort));
+    assert.match(mail.intro, /vrijblijvend advies aan bij/);
+  }
+});
