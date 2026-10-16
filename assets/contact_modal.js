@@ -138,6 +138,16 @@
       open(opener.dataset.contactSource || "");
     });
 
+    // Het venster ook zonder knop kunnen openen. De pagina van
+    // OpenVerduurzamen doet dat: daar is de knop "Volledig rapport
+    // aanvragen" van de report-api, die geen data-action voor dit venster
+    // draagt, en loopt de aanvraag eerst door eigen controles heen.
+    //
+    // Een functie op window en geen nagebootste klik: een klik ergens
+    // afvuren om een venster te openen is niet te lezen, en een lege
+    // bronnaam zou stil de verkeerde teksten geven.
+    window.openContactModal = function (source) { open(source || ""); };
+
     closeButtons.forEach(function (b) { b.addEventListener("click", close); });
 
     // Close on backdrop click (only when the overlay itself is the target,
