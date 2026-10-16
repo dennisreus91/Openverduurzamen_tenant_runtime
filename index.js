@@ -39,11 +39,14 @@ import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled
 import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
+import { rapportprofiel } from "./lib/rapportprofiel.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
   readQuotaState,
   getQuotaMax,
+  getDagGebruik,
+  verhoogDagteller,
 } from "./lib/internal_quota.js";
 
 // ---------------------------------------------------------------------------
@@ -94,6 +97,10 @@ function templateVars(config, extra = {}) {
     // weigert. Dit is alleen de nette vorm -- een knop die niet werkt hoort er
     // niet te staan.
     LABEL_PDF_UPLOAD: extra.labelPdfUpload === true ? "1" : "",
+    // Idem voor het .epa-bestand van een adviseur (de 0-meting). Zelfde vorm,
+    // zelfde bedoeling: het vak verbergen in plaats van het te tonen en
+    // daarna te laten mislukken.
+    EPA_UPLOAD: extra.epaUpload === true ? "1" : "",
     PRODUCT_NAME: config?.product?.name || "Volledig Verduurzamingsinzicht",
     TERMS_PATH: config?.product?.termsPath || "/algemene-voorwaarden.html",
     ...extra,
@@ -348,6 +355,9 @@ export function createTenantApp(config) {
   app.use("/api/mid/stream", express.json({ limit: "20mb" }));
   app.use("/api/mid/full-report-handoff", express.json({ limit: "20mb" }));
   app.use("/api/full/handoff", express.json({ limit: "20mb" }));
+  // Een geparste opname is groter dan het gewone formulier; met de standaard
+  // van 5 MB zou een .epa met veel bouwdelen hier op een 413 stuiten.
+  app.use("/api/internal/full/render", express.json({ limit: "20mb" }));
   app.use(express.json({ limit: "5mb" }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -518,7 +528,43 @@ export function createTenantApp(config) {
     const env = String(process.env.LABEL_PDF_UPLOAD ?? "").trim().toLowerCase();
     if (["1", "true", "ja", "aan", "on", "yes"].includes(env)) return true;
     if (["0", "false", "nee", "uit", "off", "no"].includes(env)) return false;
-    return config?.report?.labelPdfUpload === true;
+    // Via het opgeloste profiel, niet rechtstreeks uit de config: sinds
+    // 14 oktober 2026 staat `labelPdfUpload` in het gedeelde profiel en niet
+    // meer in elke tenantconfig. Deze regel las het veld letterlijk en gaf
+    // daardoor false, waarmee het uploadvak stilletjes verdween.
+    return rapportprofiel(config).labelPdfUpload === true;
+  }
+
+  /**
+   * Of het uploadvak voor een .epa-bestand (de 0-meting van een adviseur) aan
+   * staat. Zelfde vorm als labelPdfAan(), met dezelfde reden: een
+   * omgevingsvariabele die de config overstemt, zodat een ingang binnen een
+   * minuut dicht kan zonder deploy.
+   *
+   * NIET in het gedeelde rapportprofiel. De report-api schermt deze route
+   * niet per tenant af -- Softbee gebruikt haar al zonder vlag -- dus dit is
+   * puur de vraag welk invoervak de tenant toont. Een tenant die hem wil, zet
+   * `report.epaUpload: true` in zijn eigen config.
+   */
+  function epaUploadAan() {
+    const env = String(process.env.EPA_UPLOAD ?? "").trim().toLowerCase();
+    if (["1", "true", "ja", "aan", "on", "yes"].includes(env)) return true;
+    if (["0", "false", "nee", "uit", "off", "no"].includes(env)) return false;
+    return rapportprofiel(config).epaUpload === true;
+  }
+
+  /**
+   * Hoeveel volledige rapporten deze tenant op een dag intern mag maken.
+   *
+   * 0 of niet gezet betekent geen plafond -- dan verandert er niets voor de
+   * tenants die dit nooit gevraagd hebben. De maandteller die er al was telt
+   * alleen; hij houdt niets tegen.
+   */
+  function dagplafond() {
+    const env = Number(process.env.INTERN_DAGPLAFOND);
+    if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+    const uit = Number(config.features?.dagplafond);
+    return Number.isFinite(uit) && uit > 0 ? Math.floor(uit) : 0;
   }
 
   function buildBrandPayload() {
@@ -704,7 +750,7 @@ export function createTenantApp(config) {
       mailed_at: null,
       processing_lock: false,
       error: "",
-      source_meta: sourceMeta || null,
+      source_meta: { ...(sourceMeta || {}), invoer: invoerSoort(sourceMeta?.source, epaModel) },
     });
 
     return {
@@ -716,17 +762,34 @@ export function createTenantApp(config) {
   }
 
   /**
+   * Waar de woninggegevens van deze bestelling vandaan komen.
+   *
+   * Sinds oktober 2026 zijn dat er drie: een adres (openbare bronnen), een
+   * geupload energielabelrapport en een .epa-opname. Aan de bestelling zelf
+   * was dat niet te zien, en dat is precies wat je wilt weten als een rapport
+   * er vreemd uitziet -- de drie routes voeden de rekenkern verschillend.
+   *
+   * De `source` komt uit de handoff (de frontend zet hem); het model zegt of
+   * er werkelijk een opname bij zat.
+   */
+  function invoerSoort(source, epaModel) {
+    if (!epaModel) return "adres";
+    return String(source || "").trim().toLowerCase() === "label_pdf" ? "label_pdf" : "epa";
+  }
+
+  /**
    * Internal-flow order creation — same as createPaymentOrder but skips
    * Mollie entirely. The order is born with status "paid" so the
    * existing processOrderById flow immediately runs render → PDF →
    * mail. Used by /api/internal/full/render for WoonWijzerWinkel staff.
    */
-  async function createInternalOrder({ req, email, address, confirmedData, sourceMeta = null }) {
+  async function createInternalOrder({ req, email, address, confirmedData, epaModel = null, sourceMeta = null }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const downloadToken = newOrderToken();
     const redirectPath = config?.product?.redirectAfterPaymentPath || "/full_done.html";
     const monthUsage = incrementInternalQuota(dataDir);
+    const dagGebruik = verhoogDagteller(dataDir);
 
     createOrder({
       id: orderId,
@@ -743,6 +806,11 @@ export function createTenantApp(config) {
       email,
       address,
       confirmed_data: confirmedData,
+      // De opname, wanneer de adviseur een .epa of een energielabelrapport
+      // heeft geupload. fetchFullReportHtml() stuurt hem mee naar de
+      // report-api, die dan met de gemeten schil rekent in plaats van met
+      // schattingen uit openbare bronnen.
+      epa_model: epaModel || null,
       payment: { id: null, status: "internal", checkout_url: null },
       report_html: "",
       pdf_filename: "",
@@ -754,8 +822,10 @@ export function createTenantApp(config) {
       source_meta: {
         ...(sourceMeta || {}),
         source: "internal_full_start",
+        invoer: invoerSoort(sourceMeta?.invoer, epaModel),
         internal_user: req?.internalSession?.email || null,
         month_usage_after: monthUsage,
+        dag_gebruik_na: dagGebruik,
       },
     });
 
@@ -1155,6 +1225,7 @@ export function createTenantApp(config) {
       // omgevingsoverride daar niet kan zien. Zo blijft er EEN plek die
       // bepaalt of de upload aan staat.
       labelPdfUpload: labelPdfAan(),
+      epaUpload: epaUploadAan(),
     }));
     res.type("text/html; charset=utf-8").send(html);
   }
@@ -1266,11 +1337,32 @@ export function createTenantApp(config) {
   // POST /api/internal/full/render → cookie-protected, skip Mollie, render+mail
   // GET  /api/internal/quota      → returns { used, max, month, remaining }
 
+  /**
+   * Een tenant met EEN tool in plaats van twee ingangen.
+   *
+   * De interne flow had een eigen intakepagina (/intern/full_start.html) naast
+   * de publieke tool op /. Twee formulieren voor dezelfde woning, die uit
+   * elkaar liepen: de publieke kreeg de upload van een energielabel, het
+   * aantal zonnepanelen en de advertentie erbij, de interne niet.
+   *
+   * Staat deze schakelaar aan, dan is / de enige tool en is /intern nog
+   * uitsluitend de inlogpagina. WoonWijzerWinkel houdt de oude indeling: daar
+   * IS de interne pagina de werkplek van de adviseur, los van de publieke.
+   */
+  function eenToolAan() {
+    return Boolean(config.features?.eenTool);
+  }
+
+  /** Waar een ingelogde adviseur hoort uit te komen. */
+  function naLogin() {
+    return eenToolAan() ? "/" : "/intern/full_start.html";
+  }
+
   app.get("/intern", (req, res) => {
     // If already signed in, skip the login page and go straight to the
     // intake form. The intake page is itself cookie-protected so an
     // expired session bounces back here.
-    if (readInternalSession(req)) return res.redirect("/intern/full_start.html");
+    if (readInternalSession(req)) return res.redirect(naLogin());
     return serveTemplatedPage(req, res, "internLogin", "Interne login niet beschikbaar voor deze tenant.");
   });
 
@@ -1284,9 +1376,12 @@ export function createTenantApp(config) {
   app.get("/intern/login", (req, res) => res.redirect("/intern"));
   app.get("/intern/login.html", (req, res) => res.redirect("/intern"));
 
-  app.get("/intern/full_start.html", requireInternalSession, (req, res) =>
-    serveTemplatedPage(req, res, "internFullStart", "Interne pagina niet beschikbaar voor deze tenant.")
-  );
+  app.get("/intern/full_start.html", requireInternalSession, (req, res) => {
+    // Met een tool bestaat deze pagina niet meer. Een adviseur met een oude
+    // bladwijzer hoort geen 404 te krijgen maar de tool.
+    if (eenToolAan()) return res.redirect("/");
+    return serveTemplatedPage(req, res, "internFullStart", "Interne pagina niet beschikbaar voor deze tenant.");
+  });
 
   app.post("/api/internal/login", (req, res) => {
     const email = String(req.body?.email || "");
@@ -1308,7 +1403,7 @@ export function createTenantApp(config) {
       `${INTERNAL_COOKIE_NAME}=${encodeURIComponent(cookieValue)}; ` +
       `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(INTERNAL_COOKIE_TTL_MS / 1000)}`
     );
-    return res.json({ ok: true, redirect: "/intern/full_start.html" });
+    return res.json({ ok: true, redirect: naLogin() });
   });
 
   app.post("/api/internal/logout", (req, res) => {
@@ -1318,19 +1413,42 @@ export function createTenantApp(config) {
 
   app.post("/api/internal/full/render", requireInternalSession, async (req, res) => {
     try {
-      const address = normalizeAddressInput(req.body?.address || req.body || {});
+      const epaModel = req.body?.epa_model && typeof req.body.epa_model === "object" ? req.body.epa_model : null;
+      // Met een opname is het adres van de opname leidend en zijn de
+      // formuliervelden aanvullend -- dezelfde regel als op de publieke
+      // handoff (handleMidHandoff). Zonder deze gelijkschakeling kon een
+      // adviseur een .epa wel in het snelle rapport gebruiken maar niet in
+      // het volledige.
+      const address = normalizeAddressInput(req.body?.address || (epaModel ? epaModel.address : null) || req.body || {});
       const email = String(req.body?.email || "").trim();
       const confirmedData = normalizeConfirmedDataInput(req.body?.confirmed_data || {});
       const errors = {};
       if (!validateEmail(email)) errors.email = "Geldig e-mailadres is verplicht.";
-      if (!address.postalcode) errors.postalcode = "Postcode is verplicht.";
-      if (!address.housenumber) errors.housenumber = "Huisnummer is verplicht.";
-      Object.assign(errors, validateConfirmedDataBasic(confirmedData));
+      if (!epaModel) {
+        if (!address.postalcode) errors.postalcode = "Postcode is verplicht.";
+        if (!address.housenumber) errors.housenumber = "Huisnummer is verplicht.";
+        Object.assign(errors, validateConfirmedDataBasic(confirmedData));
+      }
       if (Object.keys(errors).length) return res.status(400).json({ error: "Ongeldige invoer.", field_errors: errors });
 
+      // Het dagplafond. Pas hier, na de veldcontrole: een afgekeurd formulier
+      // hoort geen plek van vandaag op te maken.
+      const plafond = dagplafond();
+      if (plafond > 0 && getDagGebruik(dataDir) >= plafond) {
+        return res.status(429).json({
+          error: `Er zijn vandaag al ${plafond} rapporten aangevraagd. Probeer het morgen opnieuw.`,
+          code: "dagplafond_bereikt",
+          dagplafond: plafond,
+        });
+      }
+
       const payload = await createInternalOrder({
-        req, email, address, confirmedData,
-        sourceMeta: { tenant_id: config.id, request_id: String(req.body?.request_id || "").trim() },
+        req, email, address, confirmedData, epaModel,
+        sourceMeta: {
+          tenant_id: config.id,
+          request_id: String(req.body?.request_id || "").trim(),
+          invoer: String(req.body?.source || "").trim(),
+        },
       });
       return res.json(payload);
     } catch (e) {
@@ -1349,12 +1467,19 @@ export function createTenantApp(config) {
     if (!tokenOk && !sessionOk) return res.status(401).json({ error: "Unauthorized" });
     const state = readQuotaState(dataDir);
     const max = getQuotaMax();
+    const plafond = dagplafond();
     return res.json({
       used: state.current_count,
       max,
       remaining: Math.max(0, max - state.current_count),
       month: state.current_month,
       history: state.history,
+      // Het dagplafond is het enige dat werkelijk iets tegenhoudt; zonder
+      // deze regels is dat nergens af te lezen.
+      dag: new Date().toISOString().slice(0, 10),
+      dag_gebruik: getDagGebruik(dataDir),
+      dagplafond: plafond,
+      dag_resterend: plafond > 0 ? Math.max(0, plafond - getDagGebruik(dataDir)) : null,
     });
   });
 
@@ -1403,7 +1528,11 @@ export function createTenantApp(config) {
   // websites te staan, dus de verklaring verschilt per tenant. Zonder url blijft de
   // zin staan en is er alleen geen link.
   function leadToestemming() {
-    const partner = String(config.brand?.name || "deze partner").trim();
+    // De partij die opvolgt, niet per se de tenant zelf. Bij
+    // OpenVerduurzamen is dat WoonWijzerWinkel: de bezoeker geeft
+    // toestemming om het rapport met HEN door te spreken, en dan hoort die
+    // naam in de zin te staan en niet die van het merk op de pagina.
+    const partner = String(config.report?.adviesPartner || config.brand?.name || "deze partner").trim();
     return {
       tekst:
         `Ik ga ermee akkoord dat ${partner} mijn gegevens en mijn verduurzamingsadvies ` +

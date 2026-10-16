@@ -138,6 +138,16 @@
       open(opener.dataset.contactSource || "");
     });
 
+    // Het venster ook zonder knop kunnen openen. De pagina van
+    // OpenVerduurzamen doet dat: daar is de knop "Volledig rapport
+    // aanvragen" van de report-api, die geen data-action voor dit venster
+    // draagt, en loopt de aanvraag eerst door eigen controles heen.
+    //
+    // Een functie op window en geen nagebootste klik: een klik ergens
+    // afvuren om een venster te openen is niet te lezen, en een lege
+    // bronnaam zou stil de verkeerde teksten geven.
+    window.openContactModal = function (source) { open(source || ""); };
+
     closeButtons.forEach(function (b) { b.addEventListener("click", close); });
 
     // Close on backdrop click (only when the overlay itself is the target,
@@ -175,23 +185,45 @@
       submit: submitBtn ? submitBtn.textContent : "",
     };
     let adviesModus = false;
+    let rapportModus = false;
     let huidigeBron = "";
+    // Het volledige rapport aanvragen vanuit het snelle rapport, in hetzelfde
+    // venster. Een stap voor de bezoeker, twee dingen tegelijk: hij vraagt het
+    // rapport aan en geeft meteen toestemming om het met de partner door te
+    // spreken. Dat laatste is het vinkje dat hieronder al stond.
     function pasTekstenAan(source) {
       huidigeBron = source || "";
       adviesModus = source === "advies_partner";
+      rapportModus = source === "volledig_rapport";
       const partner = (tenantData && tenantData.adviesPartner) || "onze partner";
-      if (titleEl) titleEl.textContent = adviesModus ? "Vrijblijvend advies van " + partner : origineel.title;
+      if (titleEl) {
+        titleEl.textContent = adviesModus
+          ? "Vrijblijvend advies van " + partner
+          : rapportModus
+            ? "Volledig rapport aanvragen"
+            : origineel.title;
+      }
       if (leadEl) {
         leadEl.innerHTML = adviesModus
           ? "Gratis extra dienst: de specialisten van " + partner + " zetten dit rapport om in concrete maatregelen en nemen de uitvoering volledig uit handen. Laat uw gegevens achter; zij ontvangen het snelle rapport en nemen contact met u op. De financiering regelt u met uw hypotheekadviseur."
-          : origineel.lead;
+          : rapportModus
+            ? "Het volledige rapport gaat per e-mail naar u toe: de passende maatregelen, de volgorde, de kosten, de subsidies en wat het met uw woningwaarde doet. Met het vinkje hieronder mogen de specialisten van " + partner + " het rapport met u doornemen."
+            : origineel.lead;
       }
       if (successBox) {
         successBox.textContent = adviesModus
           ? "Bedankt! Uw aanvraag en het rapport zijn verstuurd naar " + partner + ". Zij nemen zo spoedig mogelijk contact met u op."
-          : origineel.success;
+          : rapportModus
+            ? "Bedankt! Het volledige rapport wordt gemaakt en komt binnen enkele minuten per e-mail binnen."
+            : origineel.success;
       }
-      if (submitBtn) submitBtn.textContent = adviesModus ? "Advies aanvragen" : origineel.submit;
+      if (submitBtn) {
+        submitBtn.textContent = adviesModus
+          ? "Advies aanvragen"
+          : rapportModus
+            ? "Rapport aanvragen"
+            : origineel.submit;
+      }
     }
 
     // Toestemmingsvinkje voor de lead.
@@ -317,6 +349,15 @@
         if (leadP) leadP.style.display = "none";
         successBox?.removeAttribute("hidden");
         notifyHeightChange();
+        // De pagina mag hierna nog iets doen met dezelfde gegevens -- bij
+        // "volledig_rapport" is dat het aanmaken van de bestelling. Een
+        // gebeurtenis en geen terugroep: dit bestand is gedeeld, en een
+        // tenant die niets meeluistert hoort er niets van te merken.
+        try {
+          document.dispatchEvent(new CustomEvent("contact-lead-verstuurd", {
+            detail: { bron: huidigeBron, gegevens: data, antwoord: json },
+          }));
+        } catch (_) {}
       } catch (err) {
         if (errorBox) {
           // Het terugvaladres stond hier per tenant hardgecodeerd; nu komt het uit
