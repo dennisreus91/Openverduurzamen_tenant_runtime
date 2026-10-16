@@ -2231,7 +2231,13 @@ export function createTenantApp(config) {
       // als de pdf niet lukt) naar config.adviceRequest.recipient.
       if (ctxIn.productType === "advies_aanvraag") {
         const addr = formatAddress(ctxIn.address);
-        const mail = adviesAanvraagMail({ config, firstName, lastName, adres: addr });
+        // `soort` zegt WAT er gevraagd is. De tool van OpenVerduurzamen stuurt
+        // "volledig_rapport" mee; zonder die waarde blijft het de
+        // adviesaanvraag die het altijd was.
+        const mail = adviesAanvraagMail({
+          config, firstName, lastName, adres: addr,
+          soort: String(ctxIn.soort || "").trim() || "advies",
+        });
         if (mail) {
           mailOverrides = mail;
           const rows = [];
