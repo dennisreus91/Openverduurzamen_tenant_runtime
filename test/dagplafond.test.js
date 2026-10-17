@@ -94,3 +94,22 @@ test("zonder plafond verandert er niets voor de tenants die er niet om vroegen",
   assert.equal(q.dagplafond, 0);
   assert.equal(q.dag_resterend, null);
 });
+
+test("de stand komt met een schatting van wat het kost", async (t) => {
+  // Een teller zonder bedrag is niet te wegen: 40 rapporten op een dag kan
+  // prima zijn of een ramp, en dat hangt van de prijs af. Het bedrag is een
+  // schatting op basis van de DUURSTE route -- liever te hoog dan geruststellend.
+  const s = await tenant(t, { dagplafond: 2 });
+  const q = await s.quota();
+  assert.equal(q.kosten_schatting.per_rapport_eur, 1.35);
+  assert.equal(q.kosten_schatting.vandaag_eur, Math.round(q.dag_gebruik * 1.35 * 100) / 100);
+  assert.equal(q.kosten_schatting.bij_vol_dagplafond_eur, 2.7);
+  assert.match(q.kosten_schatting.toelichting, /duurste route/);
+});
+
+test("het tarief is te verzetten zonder release", async (t) => {
+  process.env.INTERN_KOSTEN_PER_RAPPORT = "0.55";
+  t.after(() => { delete process.env.INTERN_KOSTEN_PER_RAPPORT; });
+  const s = await tenant(t, { dagplafond: 2 });
+  assert.equal((await s.quota()).kosten_schatting.per_rapport_eur, 0.55);
+});
