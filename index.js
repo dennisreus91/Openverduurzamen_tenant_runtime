@@ -310,6 +310,7 @@ export function createTenantApp(config) {
     fullStart:    readFileIfExists(path.join(templatesDir, "full_start.html")),
     fullDone:     readFileIfExists(path.join(templatesDir, "full_done.html")),
     terms:        readFileIfExists(path.join(templatesDir, "algemene-voorwaarden.html")),
+    privacy:      readFileIfExists(path.join(templatesDir, "privacyverklaring.html")),
     email:        readFileIfExists(path.join(templatesDir, "email.html")),
     // Mid landing page — the free short report. When present, becomes
     // the default landing route at "/". Tenants who don't want a Mid
@@ -1272,6 +1273,11 @@ export function createTenantApp(config) {
   // -------------------------------------------------------------------------
   const TOEGANG_OPEN = [
     "/health",
+    // Je leest een privacyverklaring VOORDAT je gegevens achterlaat, en een
+    // bezoeker die het vinkje aanklikt heeft geen inlog. Achter de poort zou
+    // de link in het toestemmingsvinkje op een inlogscherm uitkomen.
+    "/privacyverklaring.html",
+    "/algemene-voorwaarden.html",
     "/api/tenant",
     "/api/internal/login",
     "/api/internal/logout",
@@ -1326,6 +1332,10 @@ export function createTenantApp(config) {
   app.get("/full_start.html", (req, res) => serveTemplatedPage(req, res, "fullStart", "Pagina niet beschikbaar."));
   app.get("/full_done.html",  (req, res) => serveTemplatedPage(req, res, "fullDone",  "Pagina niet beschikbaar."));
   app.get("/algemene-voorwaarden.html", (req, res) => serveTemplatedPage(req, res, "terms", "Algemene voorwaarden niet beschikbaar."));
+  // De privacyverklaring waar het toestemmingsvinkje naar verwijst. Zonder
+  // deze pagina stond er in dat vinkje "zie de privacyverklaring" zonder link
+  // -- een akkoord dat verwijst naar een document dat er niet is.
+  app.get("/privacyverklaring.html", (req, res) => serveTemplatedPage(req, res, "privacy", "Privacyverklaring niet beschikbaar."));
 
   // -------------------------------------------------------------------------
   // Internal flow (WoonWijzerWinkel staff)
