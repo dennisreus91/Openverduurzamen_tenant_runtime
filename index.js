@@ -561,6 +561,30 @@ export function createTenantApp(config) {
    * tenants die dit nooit gevraagd hebben. De maandteller die er al was telt
    * alleen; hij houdt niets tegen.
    */
+  /**
+   * Wat een volledig rapport ongeveer kost, in euro's.
+   *
+   * WAAROM DIT HIER STAAT
+   * Het dagplafond houdt een ontsporing tegen, maar zegt niets over geld. Je
+   * zag het verbruik pas op de rekening. Een teller zonder bedrag is een
+   * waarschuwing die je niet kunt wegen: 40 rapporten op een dag kan prima
+   * zijn of een ramp, en dat hangt van de prijs af.
+   *
+   * HET IS EEN SCHATTING EN DAT HOORT ZO TE STAAN
+   * Een adresrapport kost vijf betaalde adresaanroepen (circa EUR 0,20 per
+   * stuk) plus het taalmodel (circa EUR 0,35). Een rapport uit een opname
+   * slaat de meeste van die aanroepen over en kost dus veel minder, maar de
+   * bestelling weet hier niet welke route het was. We rekenen daarom met de
+   * DUURSTE route: liever een bedrag dat te hoog is dan een dat gerust stelt.
+   *
+   * Te verzetten met INTERN_KOSTEN_PER_RAPPORT zodra de werkelijke tarieven
+   * veranderen; dat hoeft geen release te zijn.
+   */
+  function kostenPerRapport() {
+    const env = Number(process.env.INTERN_KOSTEN_PER_RAPPORT);
+    return Number.isFinite(env) && env >= 0 ? env : 1.35;
+  }
+
   function dagplafond() {
     const env = Number(process.env.INTERN_DAGPLAFOND);
     if (Number.isFinite(env) && env >= 0) return Math.floor(env);
@@ -1490,6 +1514,15 @@ export function createTenantApp(config) {
       dag_gebruik: getDagGebruik(dataDir),
       dagplafond: plafond,
       dag_resterend: plafond > 0 ? Math.max(0, plafond - getDagGebruik(dataDir)) : null,
+      // Een SCHATTING, met de duurste route als uitgangspunt. Zie
+      // kostenPerRapport(): zonder bedrag is een teller niet te wegen.
+      kosten_schatting: {
+        per_rapport_eur: kostenPerRapport(),
+        vandaag_eur: Math.round(getDagGebruik(dataDir) * kostenPerRapport() * 100) / 100,
+        deze_maand_eur: Math.round(state.current_count * kostenPerRapport() * 100) / 100,
+        ...(plafond > 0 ? { bij_vol_dagplafond_eur: Math.round(plafond * kostenPerRapport() * 100) / 100 } : {}),
+        toelichting: "schatting op basis van de duurste route (adres); een rapport uit een opname kost minder",
+      },
     });
   });
 
