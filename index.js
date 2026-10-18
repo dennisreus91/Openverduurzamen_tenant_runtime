@@ -50,8 +50,10 @@ import {
   readQuotaState,
   getQuotaMax,
   getDagGebruik,
+  getDagGebruikVoorAccount,
   verhoogDagteller,
 } from "./lib/internal_quota.js";
+import { leesGastlogins } from "./lib/gastlogins.js";
 
 // ---------------------------------------------------------------------------
 // Long-running fetch dispatcher for the report-api render call.
@@ -526,7 +528,14 @@ export function createTenantApp(config) {
 
   function readInternalSession(req) {
     const cookies = parseCookies(req.headers.cookie || "");
-    return verifyInternalCookie(cookies[INTERNAL_COOKIE_NAME]);
+    const payload = verifyInternalCookie(cookies[INTERNAL_COOKIE_NAME]);
+    if (!payload) return null;
+    // Een geldig ondertekende cookie is niet genoeg: het account moet nog
+    // bestaan. Anders zou het intrekken van een gastlogin pas werken als
+    // diens cookie van zeven dagen verloopt, en dat is geen intrekken.
+    const account = vindAccount(payload.email);
+    if (!account) return null;
+    return { ...payload, account };
   }
 
   function requireInternalSession(req, res, next) {
@@ -542,22 +551,99 @@ export function createTenantApp(config) {
     next();
   }
 
+  // --- Wie er mag inloggen -------------------------------------------------
+  //
+  // Twee soorten account, achter dezelfde cookie en dezelfde poort:
+  //
+  //   vast   WWW_INTERNAL_EMAIL + WWW_INTERNAL_PASSWORD. Het account van de
+  //          eigenaar. Alleen het dagplafond van de tenant remt hem.
+  //   gast   een regel in GASTLOGINS. Dezelfde rechten, maar met een eigen
+  //          dagelijkse rapportlimiet, en in te trekken door die ene regel
+  //          weg te halen -- zonder het vaste wachtwoord te wijzigen en
+  //          zonder iemand anders buiten te sluiten.
+  //
+  // Waarom een gast evenveel mag zien: de tool achter de poort IS het
+  // product. Een demo die het volledige rapport niet laat zien, laat het
+  // deel niet zien waar het om gaat. De limiet zit daarom op het aantal, niet
+  // op de mogelijkheden. Zie lib/gastlogins.js voor formaat en afweging.
+  //
+  // De lijst wordt eenmaal gelezen, bij het opstarten. Een wijziging in het
+  // Render-dashboard herstart de dienst, dus dat is hetzelfde moment.
+  const gastlogins = leesGastlogins();
+  for (const klacht of gastlogins.klachten) {
+    console.warn(`[tenant-runtime] GASTLOGINS: ${klacht}`);
+  }
+
+  function vastAccountEmail() {
+    const email = String(process.env.WWW_INTERNAL_EMAIL || "").trim().toLowerCase();
+    const wachtwoord = String(process.env.WWW_INTERNAL_PASSWORD || "");
+    // Zonder allebei bestaat het vaste account niet; dat was al zo en blijft zo.
+    return email && wachtwoord ? email : "";
+  }
+
+  if (gastlogins.accounts.length) {
+    const vast = vastAccountEmail();
+    const botsing = gastlogins.accounts.find((a) => a.email === vast);
+    if (botsing) {
+      console.warn(
+        `[tenant-runtime] GASTLOGINS: ${botsing.email} is ook het vaste account; ` +
+        "de gastregel wordt genegeerd (het vaste wachtwoord en geen rapportlimiet)."
+      );
+    }
+    console.log(
+      `[tenant-runtime] ${gastlogins.accounts.length} gastlogin(s) actief: ` +
+      gastlogins.accounts.map((a) => `${a.email} (max ${a.dagmax}/dag)`).join(", ")
+    );
+  }
+
+  /**
+   * Het account bij dit e-mailadres, of null.
+   *
+   * Het vaste account wint bij gelijke namen: anders zou een regel in
+   * GASTLOGINS de eigenaar een rapportlimiet kunnen opleggen.
+   */
+  function vindAccount(email) {
+    const wie = String(email || "").trim().toLowerCase();
+    if (!wie) return null;
+    if (wie === vastAccountEmail()) return { email: wie, soort: "vast", dagmax: 0 };
+    const gast = gastlogins.accounts.find((a) => a.email === wie);
+    return gast ? { email: gast.email, soort: "gast", dagmax: gast.dagmax } : null;
+  }
+
+  /** Vergelijking in constante tijd; lengteverschil lekt niet via de tijd. */
+  function gelijkInConstanteTijd(a, b) {
+    const ba = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    if (ba.length !== bb.length) {
+      // Toch een vergelijking doen, anders is een lengteverschil aan de
+      // responstijd te merken.
+      crypto.timingSafeEqual(ba, ba);
+      return false;
+    }
+    return crypto.timingSafeEqual(ba, bb);
+  }
+
+  /**
+   * Kloppen deze gegevens? Geeft het account terug, of null.
+   *
+   * Gaf tot 18 oktober 2026 een boolean; de aanroeper moet nu weten WELK
+   * account het is, voor de eigen limiet van een gast.
+   */
   function checkInternalCredentials(email, password) {
-    const expectedEmail = String(process.env.WWW_INTERNAL_EMAIL || "").trim().toLowerCase();
-    const expectedPassword = String(process.env.WWW_INTERNAL_PASSWORD || "");
-    if (!expectedEmail || !expectedPassword) return false;
-    const inputEmail = String(email || "").trim().toLowerCase();
     const inputPassword = String(password || "");
-    // Constant-time comparison on bytes — convert to Buffers of equal
-    // length first (we pad/truncate the shorter to match). A direct
-    // !== check would leak length, so we accept some extra ceremony.
-    const ea = Buffer.from(inputEmail);
-    const eb = Buffer.from(expectedEmail);
-    const pa = Buffer.from(inputPassword);
-    const pb = Buffer.from(expectedPassword);
-    const emailOk = ea.length === eb.length && crypto.timingSafeEqual(ea, eb);
-    const passwordOk = pa.length === pb.length && crypto.timingSafeEqual(pa, pb);
-    return emailOk && passwordOk;
+    const account = vindAccount(email);
+    if (!account) {
+      // Een onbekend e-mailadres hoort niet sneller te antwoorden dan een
+      // bekend adres met een fout wachtwoord -- anders is de lijst met
+      // accounts uit te proberen.
+      gelijkInConstanteTijd(inputPassword, "x".repeat(32));
+      return null;
+    }
+    const verwacht = account.soort === "vast"
+      ? String(process.env.WWW_INTERNAL_PASSWORD || "")
+      : (gastlogins.accounts.find((a) => a.email === account.email)?.wachtwoord || "");
+    if (!verwacht) return null;
+    return gelijkInConstanteTijd(inputPassword, verwacht) ? account : null;
   }
 
   function getReportRenderUrl() {
@@ -898,7 +984,9 @@ export function createTenantApp(config) {
     const downloadToken = newOrderToken();
     const redirectPath = config?.product?.redirectAfterPaymentPath || "/full_done.html";
     const monthUsage = incrementInternalQuota(dataDir);
-    const dagGebruik = verhoogDagteller(dataDir);
+    // Het e-mailadres van het account, niet dat van de bewoner: dit is de
+    // teller waar de eigen limiet van een gastlogin op rust.
+    const dagGebruik = verhoogDagteller(dataDir, new Date(), req?.internalSession?.email || null);
 
     createOrder({
       id: orderId,
@@ -1686,12 +1774,16 @@ export function createTenantApp(config) {
     }
     const email = String(req.body?.email || "");
     const password = String(req.body?.password || "");
-    if (!checkInternalCredentials(email, password)) {
+    const account = checkInternalCredentials(email, password);
+    if (!account) {
       loginMisluktGeteld(ip);
       return res.status(401).json({ error: "Onjuiste e-mail of wachtwoord." });
     }
     const exp = Date.now() + INTERNAL_COOKIE_TTL_MS;
-    const cookieValue = signInternalCookie({ email: email.trim().toLowerCase(), exp });
+    // `soort` staat erbij om het te kunnen lezen zonder de lijst erbij te
+    // halen; wat een account MAG wordt bij elk verzoek opnieuw opgezocht
+    // (zie readInternalSession), zodat de cookie geen rechten vastlegt.
+    const cookieValue = signInternalCookie({ email: account.email, soort: account.soort, exp });
     // Cookie attributes:
     //   HttpOnly  — JS can't read it, so an XSS hole can't steal the
     //               session even if one exists.
@@ -1743,6 +1835,23 @@ export function createTenantApp(config) {
         });
       }
 
+      // En de eigen limiet van een gastlogin. Die staat NA het dagplafond,
+      // zodat een gast nooit meer ruimte heeft dan de tenant zelf, en hij
+      // meldt het aantal erbij: een demo die zonder uitleg stopt lijkt stuk.
+      const account = req.internalSession?.account || null;
+      if (account?.soort === "gast" && account.dagmax >= 0) {
+        const eigenGebruik = getDagGebruikVoorAccount(dataDir, account.email);
+        if (eigenGebruik >= account.dagmax) {
+          return res.status(429).json({
+            error: account.dagmax === 0
+              ? "Dit account kan geen volledige rapporten aanvragen."
+              : `Dit account heeft vandaag al ${account.dagmax} volledige rapporten aangevraagd. Morgen kan het weer.`,
+            code: "accountlimiet_bereikt",
+            dagmax: account.dagmax,
+          });
+        }
+      }
+
       const payload = await createInternalOrder({
         req, email, address, confirmedData, epaModel,
         sourceMeta: {
@@ -1764,8 +1873,24 @@ export function createTenantApp(config) {
   app.get("/api/internal/quota", (req, res) => {
     const adminKey = String(process.env.ADMIN_API_KEY || "").trim();
     const tokenOk = adminKey && String(req.query?.token || "").trim() === adminKey;
-    const sessionOk = !!readInternalSession(req);
-    if (!tokenOk && !sessionOk) return res.status(401).json({ error: "Unauthorized" });
+    const sessie = readInternalSession(req);
+    if (!tokenOk && !sessie) return res.status(401).json({ error: "Unauthorized" });
+
+    // Een gastlogin ziet zijn eigen stand en niet die van de tenant. Hoeveel
+    // rapporten de eigenaar deze maand heeft gedraaid en wat dat kostte, is
+    // niets voor iemand aan wie je de tool laat zien.
+    const account = sessie?.account || null;
+    if (!tokenOk && account?.soort === "gast") {
+      const gebruikt = getDagGebruikVoorAccount(dataDir, account.email);
+      return res.json({
+        account: account.email,
+        dag: new Date().toISOString().slice(0, 10),
+        dag_gebruik: gebruikt,
+        dagmax: account.dagmax,
+        dag_resterend: Math.max(0, account.dagmax - gebruikt),
+      });
+    }
+
     const state = readQuotaState(dataDir);
     const max = getQuotaMax();
     const plafond = dagplafond();
