@@ -81,3 +81,11 @@ See `tenant-woonwijzerwinkel/tenant.config.js` for a fully-populated example.
 - `FULL_HANDOFF_API_KEY` (optional, required if Mid is doing handoffs)
 - `ADMIN_API_KEY`
 - `ORDERS_DATA_DIR=/var/data` (mount Render disk here)
+
+### Overdracht door een partner (optioneel, zie `docs/OVERDRACHT.md`)
+
+- `OVERDRACHT_API_KEY` — partnersleutel(s), komma-gescheiden om te kunnen roteren. Zonder sleutel staat de overdracht uit (503), niet open.
+- `OVERDRACHT_WEBHOOK_URL` + `OVERDRACHT_WEBHOOK_SECRET` — waar de meldingen `rapport.besteld|geleverd|mislukt` heen gaan, getekend met het geheim. Zonder beide geen meldingen.
+- `OVERDRACHT_TERUG_HOSTS` — hosts waar `terug_url` naartoe mag (bv. `softbee.nl`, subdomeinen tellen mee). Anders `overdracht.terugHosts` uit de tenantconfig; zonder hosts wordt elke `terug_url` geweigerd.
+- `OVERDRACHT_PRIJS_EUR` — wat wij de partner per geleverd rapport rekenen (default `payment.priceEur`). De adviseur ziet dit bedrag niet.
+- `OVERDRACHT_WEBHOOK_MAX_POGINGEN` (default 30), `OVERDRACHT_WEBHOOK_TIMEOUT_MS` (default 10000).

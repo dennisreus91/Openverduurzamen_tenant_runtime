@@ -36,7 +36,11 @@ import { htmlToPdfBuffer } from "./lib/pdfbolt_client.js";
 import { runtimeVersie } from "./lib/runtime_versie.js";
 import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
 import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
-import { initPrefillStore, createPrefillSession, getPrefillSession } from "./lib/prefill_store.js";
+import { initPrefillStore, createPrefillSession, getPrefillSession, updatePrefillSession, findPrefillSession } from "./lib/prefill_store.js";
+import {
+  overdrachtAan, sleutelUitVerzoek, sleutelKlopt, terugHosts, valideerOverdracht, maskeerEmail,
+  webhookAan, bouwMelding, verstuurMelding,
+} from "./lib/overdracht.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
 import { rapportprofiel } from "./lib/rapportprofiel.js";
@@ -434,6 +438,8 @@ export function createTenantApp(config) {
   app.use("/api/mid/stream", express.json({ limit: "20mb" }));
   app.use("/api/mid/full-report-handoff", express.json({ limit: "20mb" }));
   app.use("/api/full/handoff", express.json({ limit: "20mb" }));
+  // De overdracht van een partner draagt het ruwe .epa als base64.
+  app.use("/api/epa/overdracht", express.json({ limit: "20mb" }));
   // Een geparste opname is groter dan het gewone formulier; met de standaard
   // van 5 MB zou een .epa met veel bouwdelen hier op een 413 stuiten.
   app.use("/api/internal/full/render", express.json({ limit: "20mb" }));
@@ -954,6 +960,76 @@ export function createTenantApp(config) {
   }
 
   /**
+   * Bestelling uit een overdracht (lib/overdracht.js): op rekening van de
+   * partner, dus zonder Mollie. Net als de interne bestelling begint hij als
+   * "paid", zodat de gewone verwerking en de herstelronde hem oppakken; aan
+   * `payment.status` ("op_rekening") is te zien dat er niets is afgerekend.
+   *
+   * `amount_eur` is wat wij de partner voor dit rapport rekenen
+   * (OVERDRACHT_PRIJS_EUR, anders de gewone prijs). De adviseur ziet dat
+   * bedrag niet: de partner bepaalt zelf wat hij doorrekent.
+   */
+  function createOverdrachtOrder({ req, sessie, doel = "" }) {
+    const baseUrl = getBaseUrl(req);
+    const orderId = newOrderId();
+    const od = sessie.overdracht || {};
+    const prijs = Number(process.env.OVERDRACHT_PRIJS_EUR || config?.payment?.priceEur || 30);
+    const confirmedData = normalizeConfirmedDataInput(doel ? { verduurzamingsdoel: doel } : {});
+
+    createOrder({
+      id: orderId,
+      tenant_id: config.id,
+      download_token: newOrderToken(),
+      status: "paid",
+      created_at: nowIso(),
+      updated_at: nowIso(),
+      amount_eur: Number.isFinite(prijs) ? prijs : 0,
+      email: od.adviseur_email,
+      address: sessie.address || {},
+      confirmed_data: confirmedData,
+      epa_model: sessie.epa_model || null,
+      payment: { id: null, status: "op_rekening", checkout_url: null },
+      report_html: "",
+      pdf_filename: "",
+      download_path: "",
+      paid_at: nowIso(),
+      mailed_at: null,
+      processing_lock: false,
+      error: "",
+      source_meta: {
+        source: "overdracht",
+        tenant_id: config.id,
+        invoer: "epa",
+        overdracht_id: od.id || null,
+        adviseur_id: od.adviseur_id || null,
+        dossier_id: od.dossier_id || null,
+        op_rekening: true,
+      },
+    });
+
+    if (orderAlertsEnabled()) {
+      sendOrderAlertEmail({ kind: "requested", order: getOrderById(orderId), config }).catch(() => {});
+    }
+    meldOverdracht(orderId, "rapport.besteld").catch(() => {});
+    triggerBackgroundProcessing(orderId);
+
+    return {
+      order_id: orderId,
+      status_url: `${baseUrl}/api/full/order/${encodeURIComponent(orderId)}`,
+    };
+  }
+
+  /**
+   * De mailinstellingen voor deze bestelling. Een rapport uit een overdracht
+   * gaat naar de adviseur, niet naar de bewoner; de tenant kan daar een eigen
+   * openingszin voor zetten (`mail.bodyIntroOverdracht`).
+   */
+  function mailConfigVoor(order) {
+    if (order?.source_meta?.source !== "overdracht" || !config?.mail?.bodyIntroOverdracht) return config;
+    return { ...config, mail: { ...config.mail, bodyIntro: config.mail.bodyIntroOverdracht } };
+  }
+
+  /**
    * Een bestelling die definitief niet geleverd kan worden: de klant bericht
    * en zijn geld terug.
    *
@@ -1055,12 +1131,75 @@ export function createTenantApp(config) {
     console.warn(`[tenant-runtime] centraal: melden mislukt (${uit.reden}) voor bestelling ${order.id}`);
   }
 
+  // Hoe vaak de herstelronde een melding aan de partner nog opnieuw probeert.
+  // Per poging zijn dat er drie (lib/overdracht.js); daarna staat hij in de
+  // bestelling en in het maandoverzicht, en is het handwerk.
+  const OVERDRACHT_MAX_POGINGEN = Number(process.env.OVERDRACHT_WEBHOOK_MAX_POGINGEN || 30);
+
+  /**
+   * Een melding aan de partner over een bestelling uit een overdracht.
+   *
+   * Eén keer per soort: wat verzonden is, staat op de bestelling en gaat niet
+   * nog eens. Gooit niet; een mislukte melding blijft staan voor de
+   * herstelronde.
+   */
+  async function meldOverdracht(orderId, type) {
+    if (!webhookAan()) return;
+    const order = getOrderById(orderId);
+    if (!order || order.source_meta?.source !== "overdracht") return;
+    const eerder = order.overdracht_meldingen?.[type];
+    if (eerder?.verzonden_op || (eerder?.pogingen || 0) >= OVERDRACHT_MAX_POGINGEN) return;
+
+    const basisUrl = String(process.env.APP_BASE_URL || "").trim().replace(/\/$/, "");
+    const rapportUrl = type === "rapport.geleverd"
+      ? kiesDownloadLink({ rapportUrl: order.rapport_url, basisUrl, orderId: order.id, downloadToken: order.download_token })
+      : "";
+    const melding = bouwMelding(type, order, { rapportUrl });
+    const uit = await verstuurMelding(melding);
+
+    mergeOrder(orderId, (current) => {
+      const vorige = current.overdracht_meldingen?.[type] || {};
+      return {
+        ...current,
+        overdracht_meldingen: {
+          ...(current.overdracht_meldingen || {}),
+          [type]: {
+            id: melding.id,
+            verzonden_op: uit.gelukt ? nowIso() : null,
+            pogingen: (vorige.pogingen || 0) + uit.pogingen,
+            fout: uit.gelukt ? "" : uit.fout || "",
+          },
+        },
+      };
+    });
+    if (!uit.gelukt) console.warn(`[tenant-runtime] overdracht: melding ${type} voor bestelling ${orderId} mislukt (${uit.fout})`);
+  }
+
+  /** Welke meldingen deze bestelling nog moet versturen, gezien haar stand. */
+  function openOverdrachtMeldingen(order) {
+    if (order?.source_meta?.source !== "overdracht") return [];
+    const nodig = ["rapport.besteld"];
+    if (order.status === "mailed") nodig.push("rapport.geleverd");
+    if (order.status === "error") nodig.push("rapport.mislukt");
+    return nodig.filter((t) => {
+      const m = order.overdracht_meldingen?.[t];
+      return !m?.verzonden_op && (m?.pogingen || 0) < OVERDRACHT_MAX_POGINGEN;
+    });
+  }
+
   // Of de eerste ronde al een regel in het log heeft gezet.
   let centraalGemeld = false;
 
   async function recoverPendingOrders() {
     const candidates = listOrders(200).filter((o) => isRecoverableStatus(o.status) && !o.processing_lock);
     for (const order of candidates) triggerBackgroundProcessing(order.id);
+    // Meldingen aan de partner die eerder niet aankwamen. Na de bestelling,
+    // zodat een vastgelopen melding nooit een bestelling ophoudt.
+    if (webhookAan()) {
+      for (const order of listOrders(10000)) {
+        for (const type of openOverdrachtMeldingen(order)) await meldOverdracht(order.id, type);
+      }
+    }
     // Opgeleverde bestellingen die de centrale database nog niet kent. Dit is
     // de wachtrij die het doorsturen losmaakt van het bestelpad: een storing
     // bij de administratie kost hooguit vertraging, geen bestelling.
@@ -1264,7 +1403,7 @@ export function createTenantApp(config) {
           orderId: order.id,
           pdfBuffer,
           filename,
-          config,
+          config: mailConfigVoor(order),
           emailTemplate: templates.email,
           downloadUrl,
           addressLine,
@@ -1278,6 +1417,10 @@ export function createTenantApp(config) {
       order = updateOrder(orderId, { status: "mailed", mailed_at: nowIso(), processing_lock: false, last_step: "mail_done", error: "" });
       appendStep(orderId, "mail_done", { to: order.email });
       await meldAanCentraal(order);
+      // Fire-and-forget: de melding herhaalt een paar keer met pauzes, en dat
+      // hoort de verwerking niet op te houden. Mislukt hij, dan pakt de
+      // herstelronde hem op.
+      meldOverdracht(orderId, "rapport.geleverd").catch(() => {});
       return order;
     } catch (e) {
       const current = getOrderById(orderId);
@@ -1310,6 +1453,7 @@ export function createTenantApp(config) {
       // gaat het nog eens proberen. Fire-and-forget, zoals de alert: een
       // mislukte melding mag de foutafhandeling niet overschrijven.
       meldMislukkingEnBetaalTerug(orderId).catch(() => {});
+      if (keepStatus === "error") meldOverdracht(orderId, "rapport.mislukt").catch(() => {});
       throw e;
     }
   }
@@ -1718,31 +1862,52 @@ export function createTenantApp(config) {
    * @param {string} foutcode   prefix voor de foutcodes naar de browser
    * @param {string} traagheid  wat er in de time-outmelding aan de klant staat
    */
+  /**
+   * Een bestand laten uitlezen door de report-api. Gedeeld door de proxy
+   * hieronder (de browser uploadt) en de overdracht (een partner stuurt het
+   * bestand server-naar-server): dezelfde tenant, dezelfde time-out.
+   *
+   * @returns {Promise<{status: number, text: string}>}
+   */
+  async function leesBestandBijReportApi(pad, body) {
+    const renderUrl = getReportRenderUrl();
+    if (!renderUrl) {
+      const err = new Error("FULL_APP_RENDER_URL ontbreekt.");
+      err.geenRenderUrl = true;
+      throw err;
+    }
+    const upstream = renderUrl.replace(/\/api\/full\/render$/i, pad);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), EPA_INGEST_TIMEOUT_MS);
+    try {
+      const r = await undiciFetch(upstream, {
+        // De tenant hoort erbij, net als op /api/mid/stream. Zonder dit
+        // weet de report-api niet met welk rapportprofiel ze rekent, en
+        // krijgt de pagina de lichtere labelsprongen terug in plaats van
+        // dezelfde doorrekening als het rapport dat erop volgt. Het veld
+        // `doel` uit de browser gaat mee in de spread.
+        method: "POST",
+        headers: buildReportApiHeaders(),
+        body: JSON.stringify({ ...(body || {}), tenant: buildBrandPayload() }),
+        dispatcher: longFetchAgent,
+        signal: abort.signal,
+      });
+      return { status: r.status, text: await r.text() };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   const maakIngestProxy = (pad, foutcode, traagheid) => async (req, res) => {
     try {
-      const renderUrl = getReportRenderUrl();
-      if (!renderUrl) return res.status(500).json({ error: "FULL_APP_RENDER_URL ontbreekt." });
-      const upstream = renderUrl.replace(/\/api\/full\/render$/i, pad);
-      const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), EPA_INGEST_TIMEOUT_MS);
       let r;
       try {
-        r = await undiciFetch(upstream, {
-          // De tenant hoort erbij, net als op /api/mid/stream. Zonder dit
-          // weet de report-api niet met welk rapportprofiel ze rekent, en
-          // krijgt de pagina de lichtere labelsprongen terug in plaats van
-          // dezelfde doorrekening als het rapport dat erop volgt. Het veld
-          // `doel` uit de browser gaat mee in de spread.
-          method: "POST",
-          headers: buildReportApiHeaders(),
-          body: JSON.stringify({ ...(req.body || {}), tenant: buildBrandPayload() }),
-          dispatcher: longFetchAgent,
-          signal: abort.signal,
-        });
-      } finally {
-        clearTimeout(timer);
+        r = await leesBestandBijReportApi(pad, req.body);
+      } catch (e) {
+        if (e?.geenRenderUrl) return res.status(500).json({ error: e.message });
+        throw e;
       }
-      const text = await r.text();
+      const text = r.text;
       res.status(r.status);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       return res.send(text);
@@ -1987,6 +2152,209 @@ export function createTenantApp(config) {
 
   app.post("/api/full/handoff", requireHandoffKey, handleMidHandoff);
   app.post("/api/full/handoff-from-mid", requireHandoffKey, handleMidHandoff);
+
+  // -------------------------------------------------------------------------
+  // Overdracht door een partner (lib/overdracht.js, docs/OVERDRACHT.md)
+  //
+  // Server-naar-server, met de partnersleutel:
+  //   POST /api/epa/overdracht          .epa erin, link eruit
+  //   GET  /api/epa/overdracht/:id      stand van een overdracht
+  //   GET  /api/epa/overdrachten        geleverde rapporten per maand (factuur)
+  // Vanuit de browser van de adviseur, met het token uit de link:
+  //   GET  /api/overdracht/:token       wat de pagina toont
+  //   POST /api/overdracht/:token/bestellen
+  // -------------------------------------------------------------------------
+  const DOELEN = ["laagste_investering", "kortste_terugverdientijd", "hoogste_rendement"];
+
+  function vereisOverdrachtSleutel(req, res, next) {
+    if (!overdrachtAan()) {
+      return res.status(503).json({ error: "De overdracht staat in deze omgeving niet aan.", code: "overdracht_uit" });
+    }
+    if (!sleutelKlopt(sleutelUitVerzoek(req))) {
+      return res.status(401).json({ error: "Ongeldige of ontbrekende sleutel.", code: "sleutel_ongeldig" });
+    }
+    next();
+  }
+
+  function overdrachtSessie(token) {
+    const sessie = getPrefillSession(String(token || ""));
+    return sessie && sessie.source === "overdracht" && sessie.overdracht ? sessie : null;
+  }
+
+  function bestellingVanOverdracht(overdrachtId) {
+    if (!overdrachtId) return null;
+    return listOrders(10000).find((o) => o.source_meta?.overdracht_id === overdrachtId) || null;
+  }
+
+  /** De stand zoals de partner hem ziet: open, besteld, geleverd of mislukt. */
+  function overdrachtStand(order) {
+    if (!order) return "open";
+    if (order.status === "mailed") return "geleverd";
+    if (order.status === "error") return "mislukt";
+    return "besteld";
+  }
+
+  app.post("/api/epa/overdracht", vereisOverdrachtSleutel, async (req, res) => {
+    const { velden, fouten } = valideerOverdracht(req.body, { hosts: terugHosts(config) });
+    if (Object.keys(fouten).length) {
+      return res.status(400).json({ error: "De overdracht is niet compleet of niet geldig.", code: "ongeldige_invoer", field_errors: fouten });
+    }
+
+    // Meteen uitlezen, niet pas als de adviseur de link opent: een kapot of
+    // ongeregistreerd bestand hoort de partner nu te horen, met de foutcode,
+    // en niet de adviseur straks als een link die niet werkt.
+    let r;
+    try {
+      r = await leesBestandBijReportApi("/api/epa/ingest", { epa_base64: velden.epa_base64 });
+    } catch (e) {
+      if (e?.geenRenderUrl) return res.status(500).json({ error: "De rapportdienst is niet ingesteld.", code: "niet_ingesteld" });
+      const timedOut = e?.name === "AbortError";
+      return res.status(timedOut ? 504 : 502).json({
+        error: timedOut ? "Het uitlezen duurde te lang. Probeer het opnieuw." : "De rapportdienst is niet bereikbaar. Probeer het opnieuw.",
+        code: timedOut ? "epa_timeout" : "rapportdienst_onbereikbaar",
+      });
+    }
+    let j = null;
+    try { j = JSON.parse(r.text); } catch { j = null; }
+    if (r.status < 200 || r.status >= 300 || !j?.model) {
+      // Een afgewezen bestand (400/413/415/422) is iets wat de partner kan
+      // oplossen; de rest ligt bij ons.
+      const bestand = [400, 413, 415, 422].includes(r.status);
+      return res.status(bestand ? 422 : 502).json({
+        error: (bestand && j?.error) || (bestand ? "Het .epa-bestand kon niet worden uitgelezen." : "De rapportdienst gaf een fout. Probeer het opnieuw."),
+        code: (bestand && j?.code) || (bestand ? "epa_onleesbaar" : "rapportdienst_fout"),
+      });
+    }
+
+    const overdrachtId = `od_${crypto.randomBytes(9).toString("hex")}`;
+    const sessie = createPrefillSession({
+      source: "overdracht",
+      tenant_id: config.id,
+      address: normalizeAddressInput(j.model.address || {}),
+      epa_model: j.model,
+      overdracht: {
+        id: overdrachtId,
+        adviseur_id: velden.adviseur_id,
+        adviseur_email: velden.adviseur_email,
+        dossier_id: velden.dossier_id,
+        terug_url: velden.terug_url,
+      },
+      ingest: { preview: j.preview || null, labelsprongen: j.labelsprongen || null, doorrekening: j.doorrekening || null },
+    });
+    console.log(`[tenant-runtime] overdracht: ${overdrachtId} aangemaakt (adviseur ${velden.adviseur_id})`);
+
+    const p = j.preview || {};
+    return res.status(201).json({
+      overdracht_id: overdrachtId,
+      url: `${getBaseUrl(req)}/mid_start.html?overdracht=${encodeURIComponent(sessie.token)}`,
+      verloopt_op: sessie.expires_at,
+      samenvatting: {
+        adres: p.address?.addr_line || null,
+        label: p.official?.label || null,
+        registratienummer: p.registratienummer || null,
+        geregistreerd: Boolean(p.is_registered),
+      },
+    });
+  });
+
+  app.get("/api/epa/overdracht/:id", vereisOverdrachtSleutel, (req, res) => {
+    const id = String(req.params.id || "");
+    const sessie = findPrefillSession((s) => s.source === "overdracht" && s.overdracht?.id === id);
+    const order = bestellingVanOverdracht(id);
+    // Een verlopen link zonder bestelling is weg; een bestelling blijft.
+    if (!sessie && !order) return res.status(404).json({ error: "Overdracht niet gevonden of verlopen.", code: "overdracht_onbekend" });
+    const od = sessie?.overdracht || {};
+    return res.json({
+      overdracht_id: id,
+      status: overdrachtStand(order),
+      adviseur_id: od.adviseur_id || order?.source_meta?.adviseur_id || null,
+      dossier_id: od.dossier_id || order?.source_meta?.dossier_id || null,
+      aangemaakt_op: sessie?.created_at || null,
+      verloopt_op: sessie?.expires_at || null,
+      bestelling: order ? {
+        bestelling_id: order.id,
+        besteld_op: order.created_at || null,
+        geleverd_op: order.mailed_at || null,
+      } : null,
+    });
+  });
+
+  app.get("/api/epa/overdrachten", vereisOverdrachtSleutel, (req, res) => {
+    const maand = String(req.query?.maand || new Date().toISOString().slice(0, 7));
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(maand)) {
+      return res.status(400).json({ error: "maand heeft de vorm JJJJ-MM, bijvoorbeeld 2026-10.", code: "ongeldige_invoer" });
+    }
+    // Wat telt is de levering: alleen een gemaild rapport wordt gefactureerd,
+    // in de maand waarin het gemaild is.
+    const rijen = listOrders(100000)
+      .filter((o) => o.source_meta?.source === "overdracht" && o.status === "mailed" && String(o.mailed_at || "").startsWith(maand))
+      .sort((a, b) => String(a.mailed_at).localeCompare(String(b.mailed_at)))
+      .map((o) => ({
+        bestelling_id: o.id,
+        overdracht_id: o.source_meta.overdracht_id || "",
+        adviseur_id: o.source_meta.adviseur_id || "",
+        dossier_id: o.source_meta.dossier_id || "",
+        postcode: o.address?.postalcode || "",
+        huisnummer: [o.address?.housenumber, o.address?.houseletter, o.address?.houseaddition].filter(Boolean).join(""),
+        besteld_op: o.created_at || "",
+        geleverd_op: o.mailed_at || "",
+        bedrag_eur: Number(o.amount_eur || 0).toFixed(2),
+      }));
+    if (String(req.query?.formaat || "").toLowerCase() === "csv") {
+      const kolommen = ["bestelling_id", "overdracht_id", "adviseur_id", "dossier_id", "postcode", "huisnummer", "besteld_op", "geleverd_op", "bedrag_eur"];
+      const cel = (v) => (/[",;\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+      const csv = [kolommen.join(";"), ...rijen.map((r) => kolommen.map((k) => cel(r[k])).join(";"))].join("\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="overdrachten-${config.id}-${maand}.csv"`);
+      return res.send(csv);
+    }
+    return res.json({ maand, aantal: rijen.length, rapporten: rijen });
+  });
+
+  app.get("/api/overdracht/:token", (req, res) => {
+    const sessie = overdrachtSessie(req.params.token);
+    if (!sessie) return res.status(404).json({ error: "Deze link is verlopen of ongeldig.", code: "overdracht_onbekend" });
+    const order = bestellingVanOverdracht(sessie.overdracht.id);
+    return res.json({
+      epa_model: sessie.epa_model,
+      preview: sessie.ingest?.preview || null,
+      labelsprongen: sessie.ingest?.labelsprongen || null,
+      doorrekening: sessie.ingest?.doorrekening || null,
+      terug_url: sessie.overdracht.terug_url || null,
+      mail_naar: maskeerEmail(sessie.overdracht.adviseur_email),
+      verloopt_op: sessie.expires_at,
+      bestelling: order ? { bestelling_id: order.id, status: overdrachtStand(order) } : null,
+    });
+  });
+
+  app.post("/api/overdracht/:token/bestellen", (req, res) => {
+    try {
+      const sessie = overdrachtSessie(req.params.token);
+      if (!sessie) return res.status(404).json({ error: "Deze link is verlopen of ongeldig.", code: "overdracht_onbekend" });
+      const akkoord = req.body?.accept_terms === true || String(req.body?.accept_terms || "").toLowerCase() === "true";
+      if (!akkoord) {
+        return res.status(400).json({
+          error: "Akkoord met de algemene voorwaarden is verplicht.",
+          field_errors: { accept_terms: "Akkoord met de algemene voorwaarden is verplicht." },
+        });
+      }
+      const doel = String(req.body?.doel || "").trim();
+      if (doel && !DOELEN.includes(doel)) return res.status(400).json({ error: "Onbekende voorkeur.", field_errors: { doel: "Onbekende voorkeur." } });
+
+      // Eén bestelling per link. Alles hieronder is synchroon (de stores
+      // lezen en schrijven synchroon), dus twee snelle klikken in dit ene
+      // proces kunnen elkaar niet inhalen.
+      const bestaand = bestellingVanOverdracht(sessie.overdracht.id);
+      if (bestaand) return res.json({ order_id: bestaand.id, al_besteld: true, mail_naar: maskeerEmail(sessie.overdracht.adviseur_email) });
+
+      const uit = createOverdrachtOrder({ req, sessie, doel });
+      updatePrefillSession(sessie.token, { bestelling_id: uit.order_id });
+      return res.status(201).json({ ...uit, al_besteld: false, mail_naar: maskeerEmail(sessie.overdracht.adviseur_email) });
+    } catch (e) {
+      console.error(`[tenant-runtime] overdracht: bestellen mislukt: ${e?.message || e}`);
+      return res.status(500).json({ error: "Bestellen is niet gelukt. Probeer het opnieuw." });
+    }
+  });
 
   app.get("/api/full/handoff/:token", (req, res) => {
     const session = getPrefillSession(String(req.params.token || ""));
