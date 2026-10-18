@@ -112,15 +112,19 @@ test("een ander adres telt apart", async (t) => {
   assert.notEqual((await s.lookup({ gezien: "203.0.113.2" })).status, 429, "de buurman heeft er niets mee te maken");
 });
 
-test("de client kan de telling niet opnieuw laten beginnen met een header", async (t) => {
-  // Dit is de kern. Vroeger telde de runtime op de EERSTE waarde uit
-  // X-Forwarded-For; door die bij elk verzoek te veranderen liep je om elke
-  // rem heen. Nu telt het adres dat Render erachter heeft gezet.
+test("op X-Forwarded-For valt niet te tellen, en daarom doen we dat ook niet", async (t) => {
+  // Deze test legt een BEPERKING vast, geen eigenschap.
+  //
+  // Met twee proxies ervoor (Cloudflare + Render) wijst req.ip naar de
+  // eerste waarde uit X-Forwarded-For, en die zet de client zelf. Wie hem
+  // bij elk verzoek verandert, loopt om de rem heen. Precies daarom is
+  // CF-Connecting-IP de bron zodra er een Cloudflare voor staat -- en achter
+  // Render staat die er altijd. Hier staat dat de terugval het alleen niet
+  // redt; de test hieronder staat dat de echte weg het wel doet.
   const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "3" } });
   let nummer = 0;
   const uit = await telTotDeRem(() => s.lookup({ gezien: "198.51.100.9", beweert: `10.0.0.${++nummer}` }));
-  assert.equal(uit.gestopt, true, "een verzonnen eerste waarde hoort niets te veranderen");
-  assert.equal(uit.door, 3);
+  assert.equal(uit.gestopt, false, "zonder CF-Connecting-IP houdt de rem niets tegen");
 });
 
 test("wie is ingelogd heeft er geen last van", async (t) => {
@@ -139,6 +143,46 @@ test("op nul staat de rem uit", async (t) => {
   const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "0" } });
   const uit = await telTotDeRem(() => s.lookup({ gezien: "198.51.100.55" }), 8);
   assert.equal(uit.gestopt, false);
+});
+
+test("achter Cloudflare telt CF-Connecting-IP, en niet wat de client zegt", async (t) => {
+  // Hier ging het twee keer mis, allebei stil. Render zet Cloudflare voor
+  // elke dienst, dus X-Forwarded-For heeft meerdere waarden: de eerste zet
+  // de client (te verzinnen) en de laatste is een adres van de edge (dat
+  // verspringt per verzoek). Geen van beide is bruikbaar als sleutel.
+  // Cloudflare schrijft CF-Connecting-IP zelf en overschrijft wat de client
+  // erin zet; dat is het enige adres dat klopt én vastligt.
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "3" } });
+  const doe = (echt, verzonnen) =>
+    fetch(`${s.basis}/api/mid/lookup`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "cf-connecting-ip": echt,
+        "x-forwarded-for": `${verzonnen}, 172.70.1.${Math.floor(Math.random() * 200) + 1}`,
+      },
+      body: JSON.stringify(ADRES),
+    });
+
+  let n = 0;
+  const uit = await telTotDeRem(() => doe("203.0.113.77", `10.0.0.${++n}`));
+  assert.equal(uit.gestopt, true, "dezelfde bezoeker hoort geremd te worden");
+  assert.equal(uit.door, 3);
+
+  assert.notEqual((await doe("203.0.113.78", "10.0.0.1")).status, 429, "een andere bezoeker niet");
+});
+
+test("de bron van het afzenderadres is af te lezen op /health", async (t) => {
+  // Zonder dit is niet te zien welke weg de telling neemt, en dat is precies
+  // hoe de twee vorige fouten onopgemerkt bleven. De NAAM van de bron, nooit
+  // het adres: /health is openbaar.
+  const s = await tenant(t);
+  const zonder = await (await fetch(`${s.basis}/health`)).json();
+  assert.equal(zonder.afzender_bron, "req.ip");
+
+  const met = await (await fetch(`${s.basis}/health`, { headers: { "cf-connecting-ip": "203.0.113.5" } })).json();
+  assert.equal(met.afzender_bron, "cf-connecting-ip");
+  assert.equal(JSON.stringify(met).includes("203.0.113.5"), false, "geen IP-adres in een openbaar antwoord");
 });
 
 test("de rem zit op elke dure route, niet alleen op de lookup", async (t) => {

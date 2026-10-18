@@ -433,7 +433,14 @@ export function createTenantApp(config) {
   // omzeilen met een headerregel. Render zet er precies een hop voor; met
   // een getal neemt Express de waarde die Render zelf heeft toegevoegd.
   // Zelfde reparatie als in de report-api, 18 oktober 2026.
-  app.set("trust proxy", Number(process.env.AANTAL_PROXIES || 1));
+  // Op 1 gezet, en dat was ook mis -- andersom. Gemeten op de live dienst
+  // (18 oktober 2026): Render zet CLOUDFLARE voor elke service
+  // (`Server: cloudflare`, `CF-RAY`, `x-render-origin-server: Render`), dus
+  // er staan er TWEE. Met 1 wees req.ip naar een adres van de edge, en dat
+  // verspringt per verzoek: 108 aanroepen op een rij liepen langs een rem
+  // die op 20 stond. Een telling die niets telt is erger dan geen telling --
+  // hij ziet eruit alsof hij er is.
+  app.set("trust proxy", Number(process.env.AANTAL_PROXIES || 2));
   // EPA-carrying routes accept larger bodies: a base64 .epa inflates ~33% and
   // zipped 0-metingen can be several MB. Path-scoped parsers run BEFORE the
   // global 5mb parser; body-parser skips already-parsed bodies, so every other
@@ -2000,8 +2007,16 @@ export function createTenantApp(config) {
   // of een tenant zijn bestellingen doorgeeft: het verschil tussen "meldt
   // niets want er was niets" en "meldt niets want hij staat uit" is anders pas
   // zichtbaar als er een bestelling misgaat.
-  app.get("/health", (_req, res) =>
-    res.json({ ok: true, tenant: config.id, ts: nowIso(), runtime: runtimeVersie(), centraal: centraalAan(), toegang: toegangAan() })
+  app.get("/health", (req, res) =>
+    res.json({
+      ok: true,
+      tenant: config.id,
+      ts: nowIso(),
+      runtime: runtimeVersie(),
+      centraal: centraalAan(),
+      toegang: toegangAan(),
+      afzender_bron: afzenderBron(req),
+    })
   );
 
   // Public brand info — useful for frontends that want to render the
@@ -2873,7 +2888,27 @@ export function createTenantApp(config) {
    * `trust proxy` op een getal (zie boven) geeft wat Render heeft gezien.
    */
   function getClientIp(req) {
+    // Cloudflare staat voor elke Render-dienst en zet CF-Connecting-IP zelf;
+    // hij OVERSCHRIJFT wat de client erin stopt. Dat maakt het hier het
+    // enige adres dat zowel klopt als niet te kiezen is. req.ip blijft de
+    // terugval voor als er geen Cloudflare voor staat: lokaal, in de tests,
+    // of na een verhuizing weg van Render.
+    const cf = String(req.headers["cf-connecting-ip"] || "").trim();
+    if (cf) return cf;
     return req.ip || req.connection?.remoteAddress || "";
+  }
+
+  /**
+   * Waar het afzenderadres vandaan kwam -- de NAAM van de bron, nooit het
+   * adres zelf.
+   *
+   * Staat in /health omdat de twee vorige pogingen allebei STIL misgingen:
+   * een rem kan er zijn, draaien, en toch niets tegenhouden omdat de sleutel
+   * per verzoek verandert. Hieraan zie je welke weg hij neemt, zonder dat er
+   * een IP-adres in een publiek antwoord belandt.
+   */
+  function afzenderBron(req) {
+    return req.headers["cf-connecting-ip"] ? "cf-connecting-ip" : "req.ip";
   }
 
   app.post("/api/lead", async (req, res) => {
