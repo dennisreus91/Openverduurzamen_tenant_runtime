@@ -54,6 +54,7 @@ import {
   verhoogDagteller,
 } from "./lib/internal_quota.js";
 import { leesGastlogins } from "./lib/gastlogins.js";
+import { maakSnelheidsgrens } from "./lib/snelheidsgrens.js";
 
 // ---------------------------------------------------------------------------
 // Long-running fetch dispatcher for the report-api render call.
@@ -425,7 +426,14 @@ export function createTenantApp(config) {
   initFeedbackStore();
 
   const app = express();
-  app.set("trust proxy", true);
+  // Hoeveel proxies er VOOR ons staan. Stond op `true`, en dat betekent
+  // "vertrouw elke hop": req.ip werd dan de EERSTE waarde uit
+  // X-Forwarded-For, en die zet de client zelf. Elke begrenzing per IP --
+  // de rem op het raden van het wachtwoord, de leadlimiet -- was daarmee te
+  // omzeilen met een headerregel. Render zet er precies een hop voor; met
+  // een getal neemt Express de waarde die Render zelf heeft toegevoegd.
+  // Zelfde reparatie als in de report-api, 18 oktober 2026.
+  app.set("trust proxy", Number(process.env.AANTAL_PROXIES || 1));
   // EPA-carrying routes accept larger bodies: a base64 .epa inflates ~33% and
   // zipped 0-metingen can be several MB. Path-scoped parsers run BEFORE the
   // global 5mb parser; body-parser skips already-parsed bodies, so every other
@@ -1061,6 +1069,15 @@ export function createTenantApp(config) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const od = sessie.overdracht || {};
+    // Deze bestelling kost ons evenveel als elke andere -- het taalmodel en
+    // de rapportbouw draaien gewoon -- en werd tot 18 oktober 2026 nergens
+    // geteld. Daardoor zag je op /api/internal/quota een rustige dag terwijl
+    // er tientallen rapporten op rekening uitgingen, en gold het dagplafond
+    // er niet voor. Het factuuroverzicht per maand
+    // (GET /api/epa/overdrachten) blijft de bron voor wat we de partner
+    // rekenen; dit gaat over onze eigen kosten en het vangnet.
+    const monthUsage = incrementInternalQuota(dataDir);
+    const dagGebruik = verhoogDagteller(dataDir);
     const prijs = Number(process.env.OVERDRACHT_PRIJS_EUR || config?.payment?.priceEur || 30);
     const confirmedData = normalizeConfirmedDataInput(doel ? { verduurzamingsdoel: doel } : {});
 
@@ -1092,6 +1109,8 @@ export function createTenantApp(config) {
         adviseur_id: od.adviseur_id || null,
         dossier_id: od.dossier_id || null,
         op_rekening: true,
+        month_usage_after: monthUsage,
+        dag_gebruik_na: dagGebruik,
       },
     });
 
@@ -1652,6 +1671,39 @@ export function createTenantApp(config) {
     const wilHtml = String(req.headers.accept || "").includes("text/html");
     if (wilHtml) return res.redirect("/intern");
     return res.status(401).json({ error: "Niet ingelogd.", code: "toegang_vereist" });
+  });
+
+  // --- Een rem op de routes die geld kosten -------------------------------
+  //
+  // Zie lib/snelheidsgrens.js voor wat dit wel en niet is. Kort: een tenant
+  // zonder toegangspoort laat deze routes voor iedereen open, en ze kosten
+  // per aanroep geld (Altum, het taalmodel, de report-api). Er stond nergens
+  // een grens.
+  //
+  // Wie is ingelogd gaat vrijuit. Een adviseur die achter elkaar tien
+  // woningen doorrekent hoort geen rem tegen te komen; het gaat om de
+  // aanroeper zonder formulier en zonder account.
+  const DURE_ROUTES = [
+    "/api/mid/lookup",
+    "/api/full/lookup-address",
+    "/api/mid/stream",
+    "/api/mid/listing-extract",
+    "/api/epa/ingest",
+    "/api/label-pdf/ingest",
+  ];
+  const DURE_PER_UUR = Number(process.env.TENANT_DURE_AANROEPEN_PER_UUR || 20);
+  const dureGrens = maakSnelheidsgrens({ perVenster: DURE_PER_UUR, vensterMs: 60 * 60 * 1000 });
+
+  app.use(DURE_ROUTES, (req, res, next) => {
+    if (DURE_PER_UUR <= 0) return next();
+    if (readInternalSession(req)) return next();
+    const uit = dureGrens.tel(getClientIp(req) || "onbekend");
+    if (uit.toegestaan) return next();
+    res.setHeader("Retry-After", String(uit.wachtS));
+    return res.status(429).json({
+      error: "Te veel aanvragen vanaf dit adres. Probeer het over een uur opnieuw.",
+      code: "te_veel_aanvragen",
+    });
   });
 
   // Root route: precedence is onepagerStart → midStart → fullStart. The
@@ -2511,6 +2563,20 @@ export function createTenantApp(config) {
       const doel = String(req.body?.doel || "").trim();
       if (doel && !DOELEN.includes(doel)) return res.status(400).json({ error: "Onbekende voorkeur.", field_errors: { doel: "Onbekende voorkeur." } });
 
+      // Hetzelfde vangnet als op de interne route. Een bestelling op rekening
+      // is voor de adviseur gratis en voor ons niet; zonder plafond loopt een
+      // lus in de software van de partner door tot de rekening komt. Pas na
+      // de veldcontrole, en voor de bestelling: een afgekeurd formulier hoort
+      // geen plek van vandaag op te maken.
+      const plafond = dagplafond();
+      if (plafond > 0 && getDagGebruik(dataDir) >= plafond) {
+        return res.status(429).json({
+          error: `Er zijn vandaag al ${plafond} rapporten aangevraagd. Probeer het morgen opnieuw.`,
+          code: "dagplafond_bereikt",
+          dagplafond: plafond,
+        });
+      }
+
       // Eén bestelling per link. Alles hieronder is synchroon (de stores
       // lezen en schrijven synchroon), dus twee snelle klikken in dit ene
       // proces kunnen elkaar niet inhalen.
@@ -2798,9 +2864,15 @@ export function createTenantApp(config) {
     return true;
   }
 
+  /**
+   * Het adres waar dit verzoek vandaan komt.
+   *
+   * Las tot 18 oktober 2026 zelf de eerste waarde uit X-Forwarded-For. Die
+   * zet de client, dus wie een regel aan die header toevoegde kreeg bij elk
+   * verzoek een "nieuw" adres en liep om elke telling heen. `req.ip` met
+   * `trust proxy` op een getal (zie boven) geeft wat Render heeft gezien.
+   */
   function getClientIp(req) {
-    const fwd = req.headers["x-forwarded-for"];
-    if (typeof fwd === "string" && fwd.length) return fwd.split(",")[0].trim();
     return req.ip || req.connection?.remoteAddress || "";
   }
 

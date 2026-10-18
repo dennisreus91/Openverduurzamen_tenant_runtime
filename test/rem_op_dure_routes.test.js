@@ -1,0 +1,157 @@
+// test/rem_op_dure_routes.test.js
+//
+// De rem op de routes die geld kosten, en het adres waarop die rem telt.
+//
+// WAAROM DEZE TEST ER TOE DOET
+// Een tenant zonder `features.toegang` laat /api/mid/lookup en /api/mid/stream
+// voor iedereen open. De sleutel naar de report-api zit in de tenant, dus wie
+// die routes aanroept betaalt niet zelf: een adreslookup is vijf betaalde
+// Altum-aanroepen. Er stond nergens een grens.
+//
+// En een grens is niets waard als de afzender zelf mag zeggen wie hij is. De
+// runtime stond op `trust proxy: true` en las bovendien de EERSTE waarde uit
+// X-Forwarded-For -- die zet de client. Eén headerregel en je had bij elk
+// verzoek een "nieuw" adres. Dat raakte niet alleen deze rem maar ook de rem
+// op het raden van het adviseurswachtwoord.
+//
+// Daarom staat hieronder niet alleen "de rem telt", maar vooral: "de rem telt
+// het adres dat Render heeft gezien, en niet wat de client erover beweert".
+//
+// Run: npm test
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "tenant-rem-"));
+process.env.ORDERS_DATA_DIR = DATA_DIR;
+const { createTenantApp } = await import("../index.js");
+
+const INLOG = {
+  WWW_INTERNAL_EMAIL: "adviseur@example.nl",
+  WWW_INTERNAL_PASSWORD: "een-wachtwoord-voor-de-test",
+  WWW_INTERNAL_SESSION_SECRET: "s".repeat(48),
+};
+
+const ADRES = { postalcode: "2625ZD", housenumber: "9" };
+
+async function tenant(t, { env = {}, features } = {}) {
+  const oud = { ...process.env };
+  Object.assign(process.env, INLOG, env);
+  const app = createTenantApp({ id: "testtenant", brand: { name: "Test" }, ...(features ? { features } : {}) });
+  const s = http.createServer(app);
+  s.keepAliveTimeout = 1;
+  await new Promise((r) => s.listen(0, "127.0.0.1", r));
+  t.after(async () => {
+    s.closeAllConnections?.();
+    await new Promise((r) => s.close(r));
+    for (const k of Object.keys({ ...INLOG, ...env })) delete process.env[k];
+    Object.assign(process.env, oud);
+  });
+
+  const basis = `http://127.0.0.1:${s.address().port}`;
+  return {
+    basis,
+    /**
+     * Een adreslookup.
+     *
+     * `gezien` is het adres dat Render aan X-Forwarded-For toevoegt (de
+     * laatste waarde, en de enige die we vertrouwen). `beweert` is wat de
+     * client er zelf voorzet.
+     */
+    lookup: ({ gezien = "198.51.100.7", beweert = null, cookie = "" } = {}) =>
+      fetch(`${basis}/api/mid/lookup`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": beweert ? `${beweert}, ${gezien}` : gezien,
+          ...(cookie ? { cookie } : {}),
+        },
+        body: JSON.stringify(ADRES),
+      }),
+    inloggen: async () => {
+      const res = await fetch(`${basis}/api/internal/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: INLOG.WWW_INTERNAL_EMAIL, password: INLOG.WWW_INTERNAL_PASSWORD }),
+      });
+      return (res.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).join("; ");
+    },
+  };
+}
+
+/** Hoeveel aanroepen er doorkomen voordat de rem erop gaat. */
+async function telTotDeRem(doe, hoogstens = 12) {
+  let door = 0;
+  for (let i = 0; i < hoogstens; i++) {
+    const res = await doe();
+    if (res.status === 429) return { door, gestopt: true, laatste: res };
+    door += 1;
+  }
+  return { door, gestopt: false, laatste: null };
+}
+
+test("na het afgesproken aantal gaat de rem erop", async (t) => {
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "3" } });
+  const uit = await telTotDeRem(() => s.lookup());
+  assert.equal(uit.gestopt, true, "de rem hoort erop te gaan");
+  assert.equal(uit.door, 3);
+  const body = await uit.laatste.json();
+  assert.equal(body.code, "te_veel_aanvragen");
+  assert.ok(uit.laatste.headers.get("retry-after"), "zegt erbij hoe lang");
+});
+
+test("een ander adres telt apart", async (t) => {
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "2" } });
+  await s.lookup({ gezien: "203.0.113.1" });
+  await s.lookup({ gezien: "203.0.113.1" });
+  assert.equal((await s.lookup({ gezien: "203.0.113.1" })).status, 429);
+  assert.notEqual((await s.lookup({ gezien: "203.0.113.2" })).status, 429, "de buurman heeft er niets mee te maken");
+});
+
+test("de client kan de telling niet opnieuw laten beginnen met een header", async (t) => {
+  // Dit is de kern. Vroeger telde de runtime op de EERSTE waarde uit
+  // X-Forwarded-For; door die bij elk verzoek te veranderen liep je om elke
+  // rem heen. Nu telt het adres dat Render erachter heeft gezet.
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "3" } });
+  let nummer = 0;
+  const uit = await telTotDeRem(() => s.lookup({ gezien: "198.51.100.9", beweert: `10.0.0.${++nummer}` }));
+  assert.equal(uit.gestopt, true, "een verzonnen eerste waarde hoort niets te veranderen");
+  assert.equal(uit.door, 3);
+});
+
+test("wie is ingelogd heeft er geen last van", async (t) => {
+  // Een adviseur die tien woningen achter elkaar doorrekent hoort geen rem
+  // tegen te komen; het gaat om de aanroeper zonder formulier en zonder
+  // account.
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "2" } });
+  const cookie = await s.inloggen();
+  assert.ok(cookie, "ingelogd");
+  for (let i = 0; i < 5; i++) {
+    assert.notEqual((await s.lookup({ gezien: "198.51.100.44", cookie })).status, 429);
+  }
+});
+
+test("op nul staat de rem uit", async (t) => {
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "0" } });
+  const uit = await telTotDeRem(() => s.lookup({ gezien: "198.51.100.55" }), 8);
+  assert.equal(uit.gestopt, false);
+});
+
+test("de rem zit op elke dure route, niet alleen op de lookup", async (t) => {
+  const s = await tenant(t, { env: { TENANT_DURE_AANROEPEN_PER_UUR: "1" } });
+  const paden = ["/api/mid/lookup", "/api/full/lookup-address", "/api/mid/stream", "/api/epa/ingest", "/api/label-pdf/ingest"];
+  for (const pad of paden) {
+    const doe = () =>
+      fetch(`${s.basis}${pad}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": `192.0.2.1, 198.51.100.${paden.indexOf(pad) + 100}` },
+        body: JSON.stringify(ADRES),
+      });
+    await doe();
+    assert.equal((await doe()).status, 429, `${pad} hoort geremd te worden`);
+  }
+});
