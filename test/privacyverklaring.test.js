@@ -32,7 +32,7 @@ const INLOG = {
 };
 
 /** Een tenant met een eigen publicDir, zodat we de sjablonen kunnen zetten. */
-async function tenant(t, { metPagina = true, toegang = true } = {}) {
+async function tenant(t, { metPagina = true, toegang = true, extraConfig = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tenant-privacy-"));
   fs.mkdirSync(path.join(dir, "templates"), { recursive: true });
   if (metPagina) {
@@ -49,6 +49,7 @@ async function tenant(t, { metPagina = true, toegang = true } = {}) {
       brand: { name: "Test" },
       publicDir: dir,
       ...(toegang ? { features: { toegang: true } } : {}),
+      ...extraConfig,
     })
   );
   server.keepAliveTimeout = 1;
@@ -79,9 +80,74 @@ test("de algemene voorwaarden net zo: je leest ze vóór je akkoord geeft", asyn
   assert.notEqual((await haal("/algemene-voorwaarden.html")).status, 302);
 });
 
-test("een tenant zonder die pagina krijgt een nette melding, geen stacktrace", async (t) => {
-  const haal = await tenant(t, { metPagina: false, toegang: false });
+// --------------------------------------------------------------------------
+// De gedeelde verklaring uit de runtime
+//
+// Tot 18 oktober 2026 gaf een tenant zonder eigen pagina hier een 404. Dat
+// was precies het gat: geen van de vier tenants leverde die pagina mee, dus
+// liep het vinkje "zie de privacyverklaring" bij allemaal dood. De runtime
+// levert hem nu zelf, gevuld met de gegevens van de tenant.
+// --------------------------------------------------------------------------
+
+test("een tenant zonder eigen pagina krijgt die van de runtime, met zijn eigen gegevens", async (t) => {
+  const haal = await tenant(t, {
+    metPagina: false,
+    toegang: false,
+    extraConfig: {
+      brand: { name: "Testmerk", legalName: "Testmerk B.V." },
+      contact: { email: "hallo@testmerk.nl", phone: "085-1234567", address1: "Teststraat 1", address2: "1234 AB Teststad" },
+    },
+  });
   const res = await haal("/privacyverklaring.html");
-  assert.equal(res.status, 404);
-  assert.match(await res.text(), /Privacyverklaring niet beschikbaar/);
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /Testmerk B\.V\./, "de verwerkingsverantwoordelijke is de tenant zelf");
+  assert.match(html, /Teststraat 1, 1234 AB Teststad/, "het adres komt uit contact.address1\\/2");
+  assert.match(html, /hallo@testmerk\.nl/);
+  assert.doesNotMatch(html, /\{\{/, "er mag geen onvervulde plaatshouder blijven staan");
+});
+
+test("zonder opvolgpartner belooft de verklaring geen doorgifte", async (t) => {
+  const haal = await tenant(t, { metPagina: false, toegang: false });
+  const html = await (await haal("/privacyverklaring.html")).text();
+  assert.match(html, /niet naar een andere partij/, "de bezoeker hoort te lezen dat er niets doorgaat");
+  assert.doesNotMatch(
+    html,
+    /<td>opvolging/,
+    "zonder partner hoort er geen opvolgregel in de tabel met derden te staan"
+  );
+});
+
+test("mét opvolgpartner staat die naam er, in de tabel en bij de grondslag", async (t) => {
+  const haal = await tenant(t, {
+    metPagina: false,
+    toegang: false,
+    extraConfig: { report: { adviesPartner: "WoonWijzerWinkel" } },
+  });
+  const html = await (await haal("/privacyverklaring.html")).text();
+  assert.match(html, /<td>WoonWijzerWinkel<\/td>/, "de partner hoort in de tabel met derden");
+  assert.match(html, /toestemming, die u altijd kunt intrekken/, "en de grondslag hoort erbij");
+  assert.doesNotMatch(html, /niet naar een andere partij/);
+});
+
+test("een eigen pagina van de tenant gaat voor die van de runtime", async (t) => {
+  const haal = await tenant(t, { metPagina: true, toegang: false });
+  const html = await (await haal("/privacyverklaring.html")).text();
+  assert.doesNotMatch(html, /Autoriteit Persoonsgegevens/, "dit hoort de eigen, korte pagina te zijn");
+});
+
+test("het toestemmingsvinkje krijgt vanzelf een link naar die pagina", async (t) => {
+  const haal = await tenant(t, { metPagina: false, toegang: false });
+  const body = await (await haal("/api/tenant")).json();
+  assert.equal(body.lead.privacyUrl, "/privacyverklaring.html");
+});
+
+test("een tenant met een eigen url op zijn website houdt die", async (t) => {
+  const haal = await tenant(t, {
+    metPagina: false,
+    toegang: false,
+    extraConfig: { contact: { privacyUrl: "https://voorbeeld.nl/privacy" } },
+  });
+  const body = await (await haal("/api/tenant")).json();
+  assert.equal(body.lead.privacyUrl, "https://voorbeeld.nl/privacy");
 });

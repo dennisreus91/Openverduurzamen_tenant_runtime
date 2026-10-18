@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Privacyverklaring – {{TENANT_NAME}}</title>
+    <style>
+      :root{
+        --bg:#f6f8f9;
+        --card:#ffffff;
+        --text:#1f2937;
+        --muted:#6b7280;
+        --border:#d7e0ea;
+        --accent:{{TENANT_ACCENT}};
+      }
+      *{box-sizing:border-box}
+      body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:24px;line-height:1.7}
+      .wrap{max-width:980px;margin:0 auto;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px}
+      h1{margin:0 0 8px;font-size:34px;line-height:1.15;color:var(--text)}
+      h2{margin:28px 0 10px;font-size:22px;line-height:1.25;color:var(--accent)}
+      h3{margin:18px 0 8px;font-size:18px;color:var(--text)}
+      p,li,td,th{font-size:16px}
+      .intro{color:var(--muted);margin:0 0 18px}
+      .meta{background:#f1f5f9;border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin:18px 0 24px}
+      .meta p{margin:0 0 4px}
+      .meta p:last-child{margin-bottom:0}
+      ul,ol{padding-left:22px;margin:10px 0}
+      li{margin:6px 0}
+      strong{color:#111827}
+      section{padding-top:18px;border-top:1px solid #eef2f7;margin-top:24px}
+      section:first-of-type{border-top:none;margin-top:0;padding-top:0}
+      table{border-collapse:collapse;width:100%;margin:12px 0}
+      th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #eef2f7;vertical-align:top}
+      th{color:var(--muted);font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.02em}
+      .nb{color:var(--muted);font-size:14px}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Privacyverklaring</h1>
+      <p class="intro">
+        Deze verklaring gaat over de verduurzamingstool van {{TENANT_NAME}}: het snelle
+        verduurzamingsinzicht en het volledige verduurzamingsrapport. Hieronder staat welke
+        gegevens we verwerken, waarvoor, met wie we ze delen en hoe lang we ze bewaren.
+      </p>
+
+      <div class="meta">
+        <p><strong>Verwerkingsverantwoordelijke:</strong> {{TENANT_LEGAL_NAME}}</p>
+        <p><strong>Adres:</strong> {{TENANT_ADDRESS}}</p>
+        <p><strong>E-mail:</strong> {{TENANT_EMAIL}} &middot; <strong>Telefoon:</strong> {{TENANT_PHONE}}</p>
+        <p class="nb">Laatst bijgewerkt: 18 oktober 2026</p>
+      </div>
+
+      <section>
+        <h2>Welke gegevens we verwerken</h2>
+        <h3>Gegevens die u zelf invult</h3>
+        <ul>
+          <li><strong>Het adres van de woning</strong> — postcode, huisnummer en toevoeging.</li>
+          <li><strong>Woningkenmerken</strong> — bouwjaar, oppervlakte, energielabel, installaties,
+            al genomen maatregelen en het aantal zonnepanelen.</li>
+          <li><strong>Een geüpload bestand</strong>, als u daarvoor kiest: uw energielabelrapport
+            (pdf) of het .epa-bestand van uw energieadviseur. Daarin staat het adres van de woning,
+            en soms de naam van de adviseur die de opname heeft gedaan.</li>
+          <li><strong>Contactgegevens</strong>, als u het volledige rapport aanvraagt: voornaam,
+            achternaam, e-mailadres, telefoonnummer en een eventuele opmerking.</li>
+        </ul>
+
+        <h3>Gegevens die we erbij halen</h3>
+        <p>
+          Op basis van het adres halen we openbare gegevens op over de woning: het geregistreerde
+          energielabel, de WOZ-waarde, bouwkundige kenmerken, een luchtfoto en de vorm van het dak.
+          Die gegevens gaan over de woning en niet over u als persoon, maar omdat ze aan een adres
+          hangen rekenen we ze hier toch toe.
+        </p>
+      </section>
+
+      <section>
+        <h2>Waarvoor we ze gebruiken</h2>
+        <ul>
+          <li><strong>Het rapport maken.</strong> Zonder adres en woningkenmerken valt er niets
+            door te rekenen. Grondslag: uitvoering van de overeenkomst.</li>
+          <li><strong>Het rapport versturen</strong> en beschikbaar houden via een downloadlink.
+            Grondslag: uitvoering van de overeenkomst.</li>
+          {{PRIVACY_PARTNER_BULLET}}
+        </ul>
+        <p>
+          We gebruiken uw gegevens niet voor reclame, we verkopen ze niet door, en we nemen op
+          basis hiervan geen geautomatiseerde besluiten met rechtsgevolg voor u.
+        </p>
+      </section>
+
+      <section>
+        <h2>Met wie we ze delen</h2>
+        <p>
+          Om het rapport te kunnen maken schakelen we een aantal partijen in. Hieronder staat per
+          partij precies wat er naartoe gaat.
+        </p>
+        <table>
+          <tr><th>Partij</th><th>Wat we delen</th><th>Waarvoor</th></tr>
+          <tr><td>Altum.ai</td><td>postcode en huisnummer</td><td>openbare woninggegevens, WOZ-waarde en het geregistreerde energielabel</td></tr>
+          <tr><td>PDOK (Kadaster)</td><td>adres en pand-identificatie</td><td>luchtfoto en de contour van het pand</td></tr>
+          <tr><td>3D BAG (TU Delft)</td><td>pand-identificatie</td><td>de dakvlakken, voor de berekening van zonnepanelen</td></tr>
+          <tr><td>Google Maps</td><td>de coördinaten van de woning</td><td>de foto op de omslag van het volledige rapport</td></tr>
+          <tr><td>Anthropic</td><td>de woninggegevens en de rapporttekst — <strong>niet</strong> uw naam of e-mailadres</td><td>het schrijven van de toelichtingen in het rapport</td></tr>
+          <tr><td>PDFBolt</td><td>het volledige rapport, inclusief het adres</td><td>het rapport omzetten naar een pdf</td></tr>
+          <tr><td>Resend</td><td>uw naam en e-mailadres</td><td>de e-mail met het rapport versturen</td></tr>
+          {{PRIVACY_MOLLIE_ROW}}
+          {{PRIVACY_PARTNER_ROW}}
+        </table>
+        <p class="nb">
+          Anthropic, Resend en Google Maps verwerken gegevens buiten de Europese Unie. Daarvoor
+          gelden de standaardcontractbepalingen van de Europese Commissie.
+        </p>
+      </section>
+
+      <section>
+        <h2>Hoe lang we ze bewaren</h2>
+        <ul>
+          <li><strong>Het rapport:</strong> 365 dagen. Daarna wordt het bestand automatisch
+            verwijderd en werkt de downloadlink niet meer. De pdf die u per e-mail kreeg blijft
+            gewoon staan — die staat in uw eigen mailbox.</li>
+          <li><strong>Uw aanvraag en contactgegevens:</strong> 24 maanden na uw laatste contact met
+            ons, zodat we een lopend traject kunnen afmaken en vragen achteraf kunnen beantwoorden.
+            Daarna verwijderen we ze.</li>
+          <li><strong>De woninggegevens van de aanvraag:</strong> even lang als de aanvraag zelf.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Cookies en meekijken</h2>
+        <p>
+          Deze tool plaatst <strong>geen</strong> analytics-cookies en gebruikt geen trackers. De
+          enige cookie die we plaatsen is de inlogsessie van de adviseur die de tool bedient. Het
+          snelle rapport dat u op het scherm ziet laadt niets van externe partijen.
+        </p>
+      </section>
+
+      <section>
+        <h2>Uw rechten</h2>
+        <p>
+          U kunt uw gegevens inzien, laten corrigeren of laten verwijderen. U kunt bezwaar maken
+          tegen de verwerking, uw toestemming intrekken en vragen om uw gegevens over te dragen.
+          Stuur daarvoor een bericht naar <strong>{{TENANT_EMAIL}}</strong>; we reageren
+          binnen een maand.
+        </p>
+        <p>
+          Bent u het niet eens met hoe wij met uw gegevens omgaan, dan kunt u een klacht indienen
+          bij de Autoriteit Persoonsgegevens.
+        </p>
+      </section>
+    </div>
+  </body>
+</html>

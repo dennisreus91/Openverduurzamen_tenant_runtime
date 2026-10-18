@@ -69,6 +69,12 @@ const longFetchAgent = new Agent({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// De map van de runtime zelf. Hieronder staat `templates/`, met de sjablonen
+// die ELKE tenant krijgt zolang hij er geen eigen versie van meelevert -- nu
+// alleen de privacyverklaring. Zie de toelichting bij `templates.privacy`.
+const RUNTIME_DIR = path.dirname(fileURLToPath(import.meta.url));
+
 function nowIso() { return new Date().toISOString(); }
 
 function fillTemplate(text, vars = {}) {
@@ -77,6 +83,54 @@ function fillTemplate(text, vars = {}) {
     out = out.split(`{{${k}}}`).join(String(v ?? ""));
   }
   return out;
+}
+
+/**
+ * De partij die de bezoeker opvolgt, als dat een ANDER is dan de tenant zelf.
+ *
+ * Bij OpenVerduurzamen is dat WoonWijzerWinkel: de bezoeker geeft toestemming
+ * om zijn gegevens met hen te delen. Bij een tenant zonder `adviesPartner`
+ * gaat er niets naar buiten, en dan hoort de privacyverklaring dat ook niet te
+ * beweren. Vandaar null in plaats van "val terug op de merknaam": die
+ * terugval is goed voor een zin in het contactvenster, maar fout in een
+ * verklaring over doorgifte.
+ */
+function opvolgPartner(config) {
+  const partner = String(config?.report?.adviesPartner || "").trim();
+  if (!partner) return null;
+  if (partner.toLowerCase() === String(config?.brand?.name || "").trim().toLowerCase()) return null;
+  return partner;
+}
+
+function htmlVeilig(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function privacyVars(config) {
+  const partner = opvolgPartner(config);
+  const p = htmlVeilig(partner || "");
+  // Mollie staat er alleen als deze tenant ook werkelijk kan innen. De
+  // Energie Raadgever factureert achteraf en heeft geen Mollie-sleutel; daar
+  // zou de regel een verwerking noemen die niet plaatsvindt.
+  const mollie = Boolean(String(process.env.MOLLIE_API_KEY || "").trim());
+  return {
+    PRIVACY_PARTNER_ROW: partner
+      ? `<tr><td>${p}</td><td>uw naam, e-mailadres, telefoonnummer, het adres en het snelle rapport</td>` +
+        `<td>opvolging — <strong>alleen</strong> als u daar toestemming voor geeft</td></tr>`
+      : "",
+    PRIVACY_PARTNER_BULLET: partner
+      ? `<li><strong>Het rapport met onze partner bespreken.</strong> Als u daar bij de aanvraag ` +
+        `toestemming voor geeft, ontvangt ${p} uw gegevens en neemt contact met u op. ` +
+        `Grondslag: uw toestemming, die u altijd kunt intrekken.</li>`
+      : `<li><strong>Niet doorgeven aan derden voor opvolging.</strong> Uw contactgegevens gaan ` +
+        `niet naar een andere partij om u te benaderen.</li>`,
+    PRIVACY_MOLLIE_ROW: mollie
+      ? `<tr><td>Mollie</td><td>uw betaalgegevens en het bedrag</td><td>de betaling van het ` +
+        `volledige rapport afhandelen</td></tr>`
+      : "",
+  };
 }
 
 function templateVars(config, extra = {}) {
@@ -89,6 +143,17 @@ function templateVars(config, extra = {}) {
     TENANT_PHONE: config?.contact?.phone || "",
     TENANT_EMAIL: config?.contact?.email || "",
     TENANT_WEBSITE: config?.contact?.website || "",
+    TENANT_ADDRESS: [config?.contact?.address1, config?.contact?.address2]
+      .map((s) => String(s || "").trim()).filter(Boolean).join(", "),
+    // De drie plekken in de gedeelde privacyverklaring die per tenant
+    // verschillen. fillTemplate() kent geen "als", dus wat voorwaardelijk is
+    // wordt hier uitgerekend en als kant-en-klaar stukje html doorgegeven.
+    //
+    // Ze staan hier en niet in de sjabloon omdat een privacyverklaring geen
+    // dingen mag beweren die voor deze tenant niet gebeuren: een tenant die
+    // niet doorgeeft aan een opvolgpartij hoort die regel niet te hebben, en
+    // een tenant zonder Mollie-sleutel int geen betalingen.
+    ...privacyVars(config),
     // Mag deze tenant een energielabel als PDF laten uploaden? Leeg betekent
     // nee. Hiermee kan het formulier het uploadvak verbergen in plaats van het
     // te tonen en daarna een 403 te vangen.
@@ -310,7 +375,20 @@ export function createTenantApp(config) {
     fullStart:    readFileIfExists(path.join(templatesDir, "full_start.html")),
     fullDone:     readFileIfExists(path.join(templatesDir, "full_done.html")),
     terms:        readFileIfExists(path.join(templatesDir, "algemene-voorwaarden.html")),
-    privacy:      readFileIfExists(path.join(templatesDir, "privacyverklaring.html")),
+    // De privacyverklaring is het ENIGE sjabloon met een gedeelde terugval.
+    //
+    // Waarom: het toestemmingsvinkje zegt "zie de privacyverklaring", en op
+    // 17 oktober 2026 had geen van de vier tenants die pagina. De bezoeker gaf
+    // naam, e-mailadres en telefoonnummer af onder een akkoord dat naar een
+    // document verwees dat niet bestond. Met een terugval kan dat niet meer
+    // gebeuren bij een tenant die er niet aan denkt -- en de keten die de
+    // verklaring beschrijft is voor alle tenants dezelfde.
+    //
+    // Wat per tenant verschilt (merknaam, adres, opvolgpartner, Mollie) vult
+    // privacyVars() in. Een tenant die een eigen tekst nodig heeft zet die
+    // gewoon in zijn eigen templates-map; die gaat voor.
+    privacy:      readFileIfExists(path.join(templatesDir, "privacyverklaring.html"))
+                  || readFileIfExists(path.join(RUNTIME_DIR, "templates", "privacyverklaring.html")),
     email:        readFileIfExists(path.join(templatesDir, "email.html")),
     // Mid landing page — the free short report. When present, becomes
     // the default landing route at "/". Tenants who don't want a Mid
@@ -1567,9 +1645,11 @@ export function createTenantApp(config) {
   // per tenant (keuze Dennis, 14 oktober 2026) -- zo staat er niet bij elke ingang
   // een eigen formulering.
   //
-  // `privacyUrl` is optioneel en volgt later: de tools komen op verschillende
-  // websites te staan, dus de verklaring verschilt per tenant. Zonder url blijft de
-  // zin staan en is er alleen geen link.
+  // `privacyUrl` wijst standaard naar de pagina die deze runtime zelf bedient.
+  // Hij stond leeg zolang elke tenant zijn eigen verklaring moest meeleveren --
+  // en dat deed er geen een, dus had het vinkje nergens een link. Nu is er een
+  // gedeelde pagina, en een tenant die hem op zijn eigen website wil hebben
+  // zet `contact.privacyUrl` en overschrijft dit.
   function leadToestemming() {
     // De partij die opvolgt, niet per se de tenant zelf. Bij
     // OpenVerduurzamen is dat WoonWijzerWinkel: de bezoeker geeft
@@ -1581,7 +1661,8 @@ export function createTenantApp(config) {
         `Ik ga ermee akkoord dat ${partner} mijn gegevens en mijn verduurzamingsadvies ` +
         `ontvangt en contact met mij opneemt over het advies. ${partner} gaat zorgvuldig ` +
         `met je gegevens om, zie de privacyverklaring.`,
-      privacyUrl: String(config.contact?.privacyUrl || "").trim(),
+      privacyUrl: String(config.contact?.privacyUrl || "").trim()
+        || (templates.privacy ? "/privacyverklaring.html" : ""),
     };
   }
 
