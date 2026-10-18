@@ -1495,10 +1495,55 @@ export function createTenantApp(config) {
     return serveTemplatedPage(req, res, "internFullStart", "Interne pagina niet beschikbaar voor deze tenant.");
   });
 
+  // --- Rem op het raden van het wachtwoord ---------------------------------
+  //
+  // De login vergelijkt in constante tijd en de cookie is HttpOnly, Secure en
+  // SameSite=Lax -- maar er was niets dat het ONBEPERKT PROBEREN tegenhield.
+  // Eén gedeeld wachtwoord plus onbeperkte pogingen is te raden op HTTP-snelheid.
+  //
+  // Alleen MISLUKTE pogingen tellen. Een adviseur die tien keer per dag
+  // inlogt hoort zichzelf niet buiten te sluiten; iemand die staat te raden
+  // haalt per definitie alleen mislukkingen.
+  //
+  // Zelfde vorm als leadCheckRate() hierboven, inclusief het opruimen: de
+  // sleutel is een IP-adres, dus zonder opruimen groeit de map mee met elk
+  // nieuw adres.
+  const LOGIN_MAX_MISLUKT = Number(process.env.LOGIN_MAX_MISLUKT_PER_KWARTIER || 10);
+  const LOGIN_VENSTER_MS = 15 * 60 * 1000;
+  const loginMislukt = new Map(); // ip -> array of epoch_ms
+
+  function loginTeVaakMis(ip) {
+    if (!ip) return false;
+    const grens = Date.now() - LOGIN_VENSTER_MS;
+    const lijst = (loginMislukt.get(ip) || []).filter((t) => t > grens);
+    loginMislukt.set(ip, lijst);
+    return lijst.length >= LOGIN_MAX_MISLUKT;
+  }
+
+  function loginMisluktGeteld(ip) {
+    if (!ip) return;
+    const grens = Date.now() - LOGIN_VENSTER_MS;
+    const lijst = (loginMislukt.get(ip) || []).filter((t) => t > grens);
+    lijst.push(Date.now());
+    loginMislukt.set(ip, lijst);
+    if (loginMislukt.size > 500) {
+      for (const [k, ts] of loginMislukt) {
+        if (!ts.some((t) => t > grens)) loginMislukt.delete(k);
+      }
+    }
+  }
+
   app.post("/api/internal/login", (req, res) => {
+    const ip = getClientIp(req);
+    if (loginTeVaakMis(ip)) {
+      // Geen aparte melding: wie staat te raden hoort niet te weten of hij
+      // op het wachtwoord of op de rem stuit.
+      return res.status(429).json({ error: "Te veel pogingen. Probeer het over een kwartier opnieuw." });
+    }
     const email = String(req.body?.email || "");
     const password = String(req.body?.password || "");
     if (!checkInternalCredentials(email, password)) {
+      loginMisluktGeteld(ip);
       return res.status(401).json({ error: "Onjuiste e-mail of wachtwoord." });
     }
     const exp = Date.now() + INTERNAL_COOKIE_TTL_MS;

@@ -151,3 +151,53 @@ test("een tenant met een eigen url op zijn website houdt die", async (t) => {
   const body = await (await haal("/api/tenant")).json();
   assert.equal(body.lead.privacyUrl, "https://voorbeeld.nl/privacy");
 });
+
+// --- Rem op het raden van het adviseurswachtwoord -------------------------
+//
+// De login vergelijkt in constante tijd en de cookie is HttpOnly, Secure en
+// SameSite=Lax, maar niets hield het ONBEPERKT PROBEREN tegen. Eén gedeeld
+// wachtwoord plus onbeperkte pogingen is te raden op HTTP-snelheid.
+//
+// Deze test staat in dit bestand omdat het de enige is die de toegangspoort
+// al opzet; een eigen harnas zou dezelfde server nog een keer starten.
+
+test("na tien misgrepen gaat de login op slot", async (t) => {
+  const haal = await tenant(t, { metPagina: false, toegang: true });
+  const basis = (await haal("/health")).url.replace(/\/health$/, "");
+
+  const post = (wachtwoord) =>
+    fetch(`${basis}/api/internal/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: INLOG.WWW_INTERNAL_EMAIL, password: wachtwoord }),
+    });
+
+  const codes = [];
+  for (let i = 0; i < 12; i++) codes.push((await post("fout")).status);
+
+  assert.ok(codes.slice(0, 10).every((c) => c === 401), `eerste tien horen 401 te zijn: ${codes.join(",")}`);
+  assert.equal(codes[10], 429, "de elfde hoort geremd te worden");
+  assert.equal(codes[11], 429);
+
+  // En het JUISTE wachtwoord komt er dan ook niet doorheen. Anders is de rem
+  // te omzeilen door hem simpelweg uit te zitten op één poging.
+  const metGoed = await post(INLOG.WWW_INTERNAL_PASSWORD);
+  assert.equal(metGoed.status, 429, "de rem geldt voor de afzender, niet voor het wachtwoord");
+});
+
+test("een geslaagde login telt niet mee voor de rem", async (t) => {
+  // Een adviseur die tien keer per dag inlogt hoort zichzelf niet buiten te
+  // sluiten; alleen misgrepen tellen.
+  const haal = await tenant(t, { metPagina: false, toegang: true });
+  const basis = (await haal("/health")).url.replace(/\/health$/, "");
+  const post = (wachtwoord) =>
+    fetch(`${basis}/api/internal/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: INLOG.WWW_INTERNAL_EMAIL, password: wachtwoord }),
+    });
+
+  for (let i = 0; i < 12; i++) {
+    assert.equal((await post(INLOG.WWW_INTERNAL_PASSWORD)).status, 200, `poging ${i + 1}`);
+  }
+});
