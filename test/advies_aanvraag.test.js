@@ -15,7 +15,7 @@ const DER = {
 };
 
 test("de aanvraag gaat naar het vaste adres van de partner", () => {
-  const mail = adviesAanvraagMail({ config: DER, firstName: "Jan", lastName: "Jansen", adres: "Horst 36 22, 8225NP Lelystad" });
+  const mail = adviesAanvraagMail({ config: DER, firstName: "Jan", lastName: "Jansen", adres: "Horst 36 22, 8225NP Lelystad", akkoord: true });
   assert.equal(mail.to, "dennisreus91@gmail.com");
   assert.match(mail.subject, /vrijblijvend advies/i);
   assert.match(mail.subject, /Horst 36 22/);
@@ -24,8 +24,8 @@ test("de aanvraag gaat naar het vaste adres van de partner", () => {
 });
 
 test("zonder adviceRequest kent de tenant deze aanvraag niet", () => {
-  assert.equal(adviesAanvraagMail({ config: { id: "woonwijzerwinkel" }, firstName: "a", lastName: "b" }), null);
-  assert.equal(adviesAanvraagMail({ config: { adviceRequest: { recipient: "  " } } }), null);
+  assert.equal(adviesAanvraagMail({ config: { id: "woonwijzerwinkel" }, firstName: "a", lastName: "b", akkoord: true }), null);
+  assert.equal(adviesAanvraagMail({ config: { adviceRequest: { recipient: "  " } }, akkoord: true }), null);
 });
 
 test("het losse rapport verbergt knoppen en de mobiele weergave", () => {
@@ -53,6 +53,7 @@ test("een aanvraag voor het volledige rapport heet ook zo", () => {
     lastName: "Bewoner",
     adres: "Parkweg 72 G, 2271AM Voorburg",
     soort: "volledig_rapport",
+    akkoord: true,
   });
   assert.match(mail.subject, /^Volledig rapport aangevraagd/);
   assert.equal(mail.heading, "Volledig rapport aangevraagd");
@@ -63,8 +64,45 @@ test("een aanvraag voor het volledige rapport heet ook zo", () => {
 
 test("zonder die waarde blijft het de adviesaanvraag die het was", () => {
   for (const soort of [undefined, "", "advies"]) {
-    const mail = adviesAanvraagMail({ config: DER, firstName: "Test", lastName: "Bewoner", adres: "X", ...(soort === undefined ? {} : { soort }) });
+    const mail = adviesAanvraagMail({ config: DER, firstName: "Test", lastName: "Bewoner", adres: "X", akkoord: true, ...(soort === undefined ? {} : { soort }) });
     assert.match(mail.subject, /^Aanvraag vrijblijvend advies/, JSON.stringify(soort));
     assert.match(mail.intro, /vrijblijvend advies aan bij/);
   }
+});
+
+// --- Geen toestemming, geen partnermail -----------------------------------
+//
+// WAAROM DIT ERBIJ KWAM (18 oktober 2026)
+// Het toestemmingsvinkje onder het snelle rapport was `required`: je kon het
+// volledige rapport niet aanvragen zonder akkoord te gaan met doorgifte aan de
+// partner. Dat is geen vrije toestemming, en de privacyverklaring beloofde het
+// tegendeel ("opvolging -- alleen als u daar toestemming voor geeft").
+//
+// Het vinkje is nu optioneel. Daarmee verschuift het risico naar deze functie:
+// zonder toestemming mogen naam, e-mailadres, telefoonnummer, adres en het
+// rapport NIET naar de opvolgpartner. Het rapport voor de bezoeker hangt hier
+// niet aan -- dat loopt via /api/internal/full/render.
+
+test("zonder toestemming gaat er niets naar de partner", () => {
+  for (const akkoord of [undefined, false, null, "true", 1]) {
+    assert.equal(
+      adviesAanvraagMail({
+        config: DER,
+        firstName: "Test",
+        lastName: "Bewoner",
+        adres: "Horst 36 22, 8225NP Lelystad",
+        soort: "volledig_rapport",
+        ...(akkoord === undefined ? {} : { akkoord }),
+      }),
+      null,
+      `akkoord=${JSON.stringify(akkoord)} hoort geen partnermail op te leveren`
+    );
+  }
+});
+
+test("alleen een echte true telt, geen waarheidsachtige waarde", () => {
+  // De standaard is met opzet NIET true: een permissieve standaardwaarde op
+  // een toestemmingsvlag is precies hoe dit de eerste keer misging.
+  assert.equal(adviesAanvraagMail({ config: DER, adres: "X" }), null, "zonder akkoord geen mail");
+  assert.ok(adviesAanvraagMail({ config: DER, adres: "X", akkoord: true }), "met akkoord wel");
 });

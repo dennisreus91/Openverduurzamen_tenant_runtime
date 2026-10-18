@@ -2358,12 +2358,36 @@ export function createTenantApp(config) {
         // `soort` zegt WAT er gevraagd is. De tool van OpenVerduurzamen stuurt
         // "volledig_rapport" mee; zonder die waarde blijft het de
         // adviesaanvraag die het altijd was.
-        const mail = adviesAanvraagMail({
+        // GEEN TOESTEMMING, GEEN PARTNERMAIL.
+        //
+        // Tot 18 oktober 2026 hing alleen de melding bij de centrale database
+        // aan het vinkje; de mail naar `adviceRequest.recipient` ging altijd.
+        // Dat kon omdat het vinkje verplicht was -- er was dus altijd
+        // toestemming. Nu het optioneel is (zie assets/contact_modal.js) zou
+        // dat betekenen dat naam, e-mailadres, telefoonnummer, adres en het
+        // rapport alsnog naar de opvolgpartner gaan van iemand die daar nee
+        // tegen zei. Precies wat de privacyverklaring uitsluit.
+        //
+        // Zonder toestemming valt de mail terug op LEAD_EMAIL: de tenant zelf
+        // hoort gewoon dat er een rapport is aangevraagd. Dat is de
+        // verwerkingsverantwoordelijke, geen derde.
+        //
+        // Het rapport voor de bezoeker hangt hier niet aan; dat loopt via
+        // /api/internal/full/render.
+        // Zonder toestemming geeft dit null en blijft `mailOverrides` leeg:
+        // de mail valt dan terug op LEAD_EMAIL, de tenant zelf. Dat is de
+        // verwerkingsverantwoordelijke en geen derde, en die moet zijn eigen
+        // aanvraag gewoon kunnen zien.
+        //
+        // De INHOUD -- adres, gecontroleerde gegevens, het snelle rapport als
+        // bijlage -- staat daarom buiten de if: een kale mail zonder adres is
+        // voor de tenant onbruikbaar.
+        mailOverrides = adviesAanvraagMail({
           config, firstName, lastName, adres: addr,
           soort: String(ctxIn.soort || "").trim() || "advies",
+          akkoord: body.akkoord === true,
         });
-        if (mail) {
-          mailOverrides = mail;
+        {
           const rows = [];
           if (addr) rows.push(["Adres", addr]);
           rows.push(...humanizeConfirmed(ctxIn.confirmedData));

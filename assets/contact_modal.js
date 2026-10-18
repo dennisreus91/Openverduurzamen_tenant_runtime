@@ -251,13 +251,34 @@
         rij.style.cssText = "display:flex;gap:.5rem;align-items:flex-start;margin:.75rem 0;font-size:.875rem;line-height:1.4;";
         const vak = document.createElement("input");
         vak.type = "checkbox";
-        vak.required = true;
+        // OPTIONEEL, en dat is het hele punt.
+        //
+        // Dit vinkje stond op `required`, terwijl de tekst om iets heel anders
+        // vraagt dan om het rapport te mogen maken: toestemming om je gegevens
+        // aan de opvolgpartner te geven. Je kon het volledige rapport dus niet
+        // krijgen zonder die doorgifte te accepteren. Toestemming die je moet
+        // geven om de dienst te krijgen is geen vrije toestemming, en de
+        // privacyverklaring beloofde het tegendeel: "opvolging -- alleen als u
+        // daar toestemming voor geeft".
+        //
+        // Het rapport zelf hangt hier niet aan: dat loopt via een eigen
+        // aanroep (/api/internal/full/render) die het formulier na het
+        // versturen doet. Zonder vinkje krijgt de bezoeker dus gewoon zijn
+        // rapport, en gaat er niets naar de partner -- zie de advies_aanvraag-
+        // route in index.js, die de partnermail sinds 18 oktober 2026 aan deze
+        // instemming koppelt.
+        vak.required = false;
         vak.setAttribute("data-contact-akkoord", "");
         vak.style.cssText = "margin-top:.2rem;flex:0 0 auto;";
         const span = document.createElement("span");
-        span.textContent = tekst;
+        // "(optioneel)" vooraan in de zin, niet achter de privacylink: een
+        // vinkje dat verplicht oogt wordt "voor de zekerheid" aangezet, en
+        // dan is de toestemming net zo min vrij gegeven als toen hij echt
+        // verplicht was.
+        const tekstMetHint = `${tekst} (optioneel)`;
+        span.textContent = tekstMetHint;
         if (tenant.lead.privacyUrl) {
-          span.textContent = tekst + " ";
+          span.textContent = tekstMetHint + " ";
           const a = document.createElement("a");
           a.href = tenant.lead.privacyUrl;
           a.target = "_blank";
@@ -301,7 +322,6 @@
 
       // Quick client-side checks. Server validates again.
       const missing = [];
-      if (akkoordVak && !akkoordVak.checked) missing.push("Akkoord met het gebruik van je gegevens");
       if (!data.firstName) missing.push("Voornaam");
       if (!data.lastName)  missing.push("Achternaam");
       if (!data.email || !/^\S+@\S+\.\S+$/.test(data.email)) missing.push("E-mailadres");
