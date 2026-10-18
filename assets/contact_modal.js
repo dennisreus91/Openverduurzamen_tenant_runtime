@@ -271,11 +271,13 @@
         vak.setAttribute("data-contact-akkoord", "");
         vak.style.cssText = "margin-top:.2rem;flex:0 0 auto;";
         const span = document.createElement("span");
-        // "(optioneel)" vooraan in de zin, niet achter de privacylink: een
-        // vinkje dat verplicht oogt wordt "voor de zekerheid" aangezet, en
-        // dan is de toestemming net zo min vrij gegeven als toen hij echt
-        // verplicht was.
-        const tekstMetHint = `${tekst} (optioneel)`;
+        // "Optioneel:" VOORAAN, niet achteraan. Een vinkje dat verplicht oogt
+        // wordt "voor de zekerheid" aangezet, en dan is de toestemming net zo
+        // min vrij gegeven als toen hij echt verplicht was. Achteraan belandde
+        // het woord bovendien tussen de slotzin en de privacylink in
+        // ("... zie de privacyverklaring. (optioneel) Privacyverklaring"), en
+        // dat leest als een voetnoot in plaats van als de kern.
+        const tekstMetHint = `Optioneel: ${tekst.charAt(0).toLowerCase()}${tekst.slice(1)}`;
         span.textContent = tekstMetHint;
         if (tenant.lead.privacyUrl) {
           span.textContent = tekstMetHint + " ";
