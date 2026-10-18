@@ -2318,10 +2318,12 @@ export function createTenantApp(config) {
         heating_supply: { cv_ketel:"CV-ketel", warmtepomp:"Warmtepomp", pelletkachel:"Pelletkachel", warmtenet:"Warmtenet", unknown:"Onbekend" },
         heat_distribution: { radiatoren_convectoren:"Radiatoren/convectoren", elektrische_radiatoren_convectoren:"Elektrische radiatoren/convectoren", vloerverwarming_water:"Vloerverwarming (water)", vloerverwarming_elektrisch:"Vloerverwarming (elektrisch)", infraroodpanelen:"Infrarood panelen", unknown:"Onbekend" },
         existing_measures: { vloerisolatie:"Vloerisolatie", muurisolatie:"Muurisolatie", dakisolatie:"Dakisolatie", glasisolatie:"Glasisolatie", zonnepanelen:"Zonnepanelen", thuisbatterij:"Thuisbatterij", warmtepomp:"Warmtepomp", zonneboiler:"Zonneboiler", elektrische_tapwaterverwarming:"Elektrische tapwaterverwarming" },
+        glas_type: { enkel:"Enkel glas", dubbel:"Dubbel glas (vóór ~2000)", hr_plus_plus:"HR++ of nieuwer", drievoudig:"Drievoudig glas" },
       };
       const FIELD_LABELS = {
         soort_woning: "Soort woning", build_year: "Bouwjaar", floor_area_m2: "Woonoppervlakte (m²)", energy_label: "Huidig energielabel",
         ventilation_type: "Ventilatie", heating_supply: "Warmtevoorziening", heat_distribution: "Warmtesysteem", existing_measures: "Reeds aanwezig",
+        glas_type: "Soort glas",
       };
       function humanizeConfirmed(cd) {
         if (!cd || typeof cd !== "object") return [];
