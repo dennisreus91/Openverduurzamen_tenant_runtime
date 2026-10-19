@@ -176,3 +176,33 @@ test("een ontbrekend bedrag levert geen 'NaN' in de mail op", () => {
   assert.doesNotMatch(m.html, /NaN/);
   assert.match(m.html, /het betaalde bedrag/);
 });
+
+test("bij een rapport dat niets kost belooft de mail geen terugbetaling", () => {
+  // Gezien in een echte mail op 19 oktober 2026: "U krijgt EUR 0,00 terug.
+  // Neem contact met ons op, dan zorgen wij daarvoor." Dat is geen troost
+  // maar een raadsel -- het nodigt uit tot bellen over een bedrag dat niet
+  // bestaat, net wanneer er al iets is misgegaan. De interne route rekent
+  // niets af (amount_eur 0, payment.status "internal"), en viel toch in de
+  // tak voor een openstaande terugbetaling.
+  const m = bouwMislukteOrderMail({
+    order: { ...ORDER, amount_eur: 0, payment: { id: null, status: "internal", checkout_url: null } },
+    config: CONFIG,
+    terugbetaling: { gepoogd: false, gelukt: false },
+  });
+  assert.doesNotMatch(m.html, /terug/i);
+  assert.doesNotMatch(m.html, /0,00/);
+  assert.match(m.html, /niets in rekening gebracht/);
+});
+
+test("een onbekend bedrag blijft wel als betaald behandeld", () => {
+  // Weten we het bedrag niet, dan weten we ook niet of er is betaald.
+  // "Niets in rekening gebracht" zou dan een bewering zijn die we niet
+  // kunnen waarmaken.
+  const m = bouwMislukteOrderMail({
+    order: { ...ORDER, amount_eur: undefined },
+    config: CONFIG,
+    terugbetaling: { gepoogd: false, gelukt: false },
+  });
+  assert.doesNotMatch(m.html, /niets in rekening gebracht/);
+  assert.match(m.html, /het betaalde bedrag/);
+});
