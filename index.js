@@ -206,6 +206,23 @@ function normalizeAddressInput(input = {}) {
   };
 }
 
+/**
+ * Het adres als één regel, voor een mailonderwerp, een kop of een
+ * bestandsnaam.
+ *
+ * Stond als geneste functie binnen de contactroute, en was daardoor nergens
+ * anders te gebruiken: de pdf-route van het snelle rapport had hem nodig en
+ * kreeg stil `undefined` -- iets wat `node --check` niet ziet en pas bij de
+ * eerste aanroep omvalt. Hier staat hij op modulehoogte, zodat beide
+ * ingangen hetzelfde adres opschrijven.
+ */
+function formatAddress(addr) {
+  if (!addr || typeof addr !== "object") return "";
+  if (addr.addr_line) return String(addr.addr_line);
+  const num = [addr.housenumber, addr.houseaddition].filter(Boolean).map(String).map((s) => s.trim()).join("");
+  return [addr.postalcode, num].filter(Boolean).join(" ").trim();
+}
+
 function validateEmail(email) { return /^.+@.+\..+$/.test(String(email || "").trim()); }
 
 function validateConfirmedDataBasic(data = {}) {
@@ -453,6 +470,11 @@ export function createTenantApp(config) {
   // te strakke limiet.
   app.use("/api/label-pdf/ingest", express.json({ limit: "20mb" }));
   app.use("/api/mid/stream", express.json({ limit: "20mb" }));
+  // De downloadknop stuurt het gerenderde rapport terug om er een pdf van te
+  // maken. Dat is al snel enkele honderden kilobytes en de route weigert zelf
+  // alles boven 1,5 MB; deze parser moet daar dus ruim boven zitten, want een
+  // 413 van de globale parser zou de knop stil laten falen.
+  app.use("/api/mid/pdf", express.json({ limit: "20mb" }));
   app.use("/api/mid/full-report-handoff", express.json({ limit: "20mb" }));
   app.use("/api/full/handoff", express.json({ limit: "20mb" }));
   // De overdracht van een partner draagt het ruwe .epa als base64.
@@ -2015,6 +2037,13 @@ export function createTenantApp(config) {
       runtime: runtimeVersie(),
       centraal: centraalAan(),
       toegang: toegangAan(),
+      // Kan deze tenant een pdf maken? Zonder PDFBOLT_API_KEY valt de
+      // downloadknop onder het snelle rapport terug op de printdialoog en
+      // krijgt de leadmail het rapport als html in plaats van als pdf --
+      // allebei stil, allebei pas zichtbaar als iemand erover valt. Net als
+      // bij `centraal` hoort dat van buiten af te lezen te zijn, want de
+      // sleutel staat in het Render-dashboard en niet in deze repo.
+      pdf: Boolean(process.env.PDFBOLT_API_KEY),
       afzender_bron: afzenderBron(req),
     })
   );
@@ -2259,6 +2288,64 @@ export function createTenantApp(config) {
       try { res.end(); } catch {}
     } finally {
       res.off("close", onClientClose);
+    }
+  });
+
+  // Het snelle rapport als pdf, voor de downloadknop eronder.
+  //
+  // WAAROM DIT GEEN HERBEREKENING IS
+  // De knop riep `window.print()` aan. Dat is de printdialoog van de browser;
+  // op de machine van Ronald Krijgsman zocht die een printer (21 oktober
+  // 2026), en wat je eruit krijgt hangt af van zijn browser en zijn
+  // printerinstellingen in plaats van van ons.
+  //
+  // De voor de hand liggende reparatie -- het rapport serverzijdig opnieuw
+  // opbouwen -- is hier juist de verkeerde. Het snelle rapport bevat
+  // adviestekst van een taalmodel, dus opnieuw renderen betekent opnieuw
+  // betalen én een andere tekst dan er op het scherm staat. Keuze Dennis,
+  // 21 oktober 2026: de download verwerkt uitsluitend de uitkomsten die er
+  // al zijn. De browser stuurt dus de html die hij toont, wij zetten er een
+  // liggende A4 omheen en maken er een pdf van. Geen Altum-aanroep, geen
+  // model, en bij dezelfde knop twee keer hetzelfde bestand.
+  //
+  // DEZELFDE WEG ALS DE LEADMAIL
+  // Die stuurt het snelle rapport al als pdf-bijlage mee, met dezelfde
+  // wrapper en dezelfde omzetter. Dat is precedent voor het terugsturen van
+  // de eigen html: er komt niets binnen wat de bezoeker niet zelf al had, en
+  // het bestand gaat alleen terug naar diezelfde bezoeker.
+  //
+  // VALT HIJ OM, DAN VALT DE KNOP TERUG
+  // Zonder PDFBOLT_API_KEY of bij een storing bij PDFBolt komt hier een
+  // foutmelding uit en schakelt de knop terug naar `window.print()`. Dat is
+  // precies het gedrag van voorheen, dus een ontbrekende sleutel maakt de
+  // knop niet stuk -- hij wordt alleen niet beter.
+  app.post("/api/mid/pdf", async (req, res) => {
+    const rapportHtml = typeof req.body?.html === "string" ? req.body.html : "";
+    if (!rapportHtml.trim()) {
+      return res.status(400).json({ error: "html ontbreekt.", code: "pdf_geen_html" });
+    }
+    // Dezelfde bovengrens als de leadmail hanteert. Daarboven is het geen
+    // rapport meer maar een fout, en een pdf-aanroep van tientallen megabytes
+    // houdt een werker minutenlang bezet.
+    if (rapportHtml.length > 1_500_000) {
+      return res.status(413).json({ error: "Het rapport is te groot om als pdf te maken.", code: "pdf_te_groot" });
+    }
+
+    const adres = formatAddress(req.body?.address) || "";
+    const bestand = `snel_verduurzamingsinzicht_${(adres || "rapport").replace(/[^a-z0-9]+/gi, "_").slice(0, 60) || "rapport"}.pdf`;
+
+    try {
+      const los = losRapportHtml({ adres, rapportHtml, tenantNaam: config?.brand?.name });
+      const pdf = await htmlToPdfBuffer(los);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${bestand}"`);
+      res.setHeader("Content-Length", String(pdf.length));
+      res.setHeader("Cache-Control", "no-store");
+      return res.send(pdf);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[mid-pdf] pdf maken mislukt:", e?.message || e);
+      return res.status(502).json({ error: "De pdf kon niet gemaakt worden.", code: "pdf_mislukt" });
     }
   });
 
@@ -2986,13 +3073,6 @@ export function createTenantApp(config) {
         }
         return out;
       }
-      function formatAddress(addr) {
-        if (!addr || typeof addr !== "object") return "";
-        if (addr.addr_line) return String(addr.addr_line);
-        const num = [addr.housenumber, addr.houseaddition].filter(Boolean).map(String).map((s) => s.trim()).join("");
-        return [addr.postalcode, num].filter(Boolean).join(" ").trim();
-      }
-
       // ----- mid_report path -----
       // Client sends: { productType:"mid_report", address, confirmedData,
       //                 reportHtml (capped at ~1MB) }

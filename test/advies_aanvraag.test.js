@@ -31,10 +31,37 @@ test("zonder adviceRequest kent de tenant deze aanvraag niet", () => {
 test("het losse rapport verbergt knoppen en de mobiele weergave", () => {
   const html = losRapportHtml({ adres: "Horst 36 22", rapportHtml: '<div class="mid-grid">x</div>', tenantNaam: "De Energie Raadgever" });
   assert.match(html, /^<!doctype html>/);
-  assert.match(html, /mid-mobile-stack,.mid-footer-cta/);
+  assert.match(html, /#pdfRapport .mid-report .mid-mobile-stack\{display:none!important\}/);
+  assert.match(html, /\.mid-footer-cta,\.contactCta,\.rapportActies\{display:none!important\}/);
   assert.match(html, /<div class="mid-grid">x<\/div>/);
   assert.match(html, /De Energie Raadgever · Horst 36 22/);
   assert.doesNotMatch(losRapportHtml({ adres: "<script>", rapportHtml: "" }), /<script>/);
+});
+
+// --- De pdf staat liggend, en de tabel blijft staan ------------------------
+//
+// WAAROM DIT EEN TEST VERDIENT (21 oktober 2026)
+// Staand A4 houdt bij 10 mm marge ~718 CSS-pixels over, en het rapport zelf
+// schakelt onder 768 naar de gestapelde telefoonweergave (mid_renderer.js).
+// De pdf toonde daardoor drie maatregelen onder elkaar in plaats van de
+// vergelijkingstabel. Ronald Krijgsman zag dat bij het downloaden en vroeg om
+// "één A4 in landschap, naast elkaar".
+//
+// De breedte alleen is niet genoeg: we weten niet met welke viewportbreedte
+// PDFBolt de media query beoordeelt, en die media query komt NA ons blok
+// binnen (hij zit in de meegestuurde rapport-html). Bij gelijke specificiteit
+// wint de laatste, dus zonder de id-selector zou de telefoonweergave alsnog
+// winnen. Deze test bewaakt allebei.
+
+test("de pdf is liggend en dwingt de vergelijkingstabel af", () => {
+  const html = losRapportHtml({ adres: "Horst 36 22", rapportHtml: "<div>x</div>" });
+
+  assert.match(html, /@page\{size:A4 landscape/, "liggend, anders valt het rapport terug op de telefoonweergave");
+
+  // De id-selector is het punt: zonder `#pdfRapport` ervoor weegt onze regel
+  // even zwaar als die uit de media query, en dan beslist de volgorde.
+  assert.match(html, /#pdfRapport \.mid-report \.mid-grid\{display:grid!important\}/);
+  assert.match(html, /<div id="pdfRapport"><div>x<\/div><\/div>/);
 });
 
 // --- Wat er gevraagd is, staat in de mail ----------------------------------
