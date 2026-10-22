@@ -270,3 +270,73 @@ test("handtekening en maskering", () => {
   assert.equal(maskeerEmail("piet@softbee.nl"), "p***@softbee.nl");
   assert.equal(maskeerEmail("kapot"), "");
 });
+
+// --- De voorkeuren van de adviseur horen in de bestelling ------------------
+//
+// WAT HIER MISGING (22 oktober 2026)
+// De adviseur vult op de overdrachtspagina vier dingen in die niets over de
+// woning zeggen maar over wat de klant wil en kan: het doel, een maximaal
+// budget, een gemeentelijke subsidie en of er een verbouwing gepland staat.
+// Het snelle rapport dat hij op datzelfde scherm ziet rekent daar al mee --
+// epa_app.js stuurt ze naar /api/mid/stream. De bestelling van het volledige
+// rapport stuurde alleen het doel mee.
+//
+// Gevolg: twee documenten over dezelfde woning met andere scenario's, en
+// niets dat uitlegt waarom. Precies het soort verschil dat pas opvalt als een
+// klant ze naast elkaar legt.
+//
+// Keuren gebeurt niet hier maar in de report-api (lib/confirmed_data.js), die
+// een bedrag buiten zijn grenzen weglaat in plaats van klemt. Deze test
+// bewaakt alleen dat ze meekomen -- en dat onzin niet meekomt.
+
+test("budget, subsidie en verbouwing komen mee in de bestelling op rekening", async (t) => {
+  const { basis, maak } = await opzet(t);
+  const od = await (await maak(GELDIG)).json();
+  const token = new URL(od.url).searchParams.get("overdracht");
+
+  const r = await fetch(`${basis}/api/overdracht/${token}/bestellen`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      accept_terms: true,
+      doel: "laagste_investering",
+      max_budget_eur: "15000",
+      gemeentelijke_subsidie_eur: 1200,
+      verbouwing: "ja",
+    }),
+  });
+  assert.equal(r.status, 201);
+  const { order_id } = await r.json();
+
+  const orders = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "full_orders.json"), "utf-8")).orders;
+  const cd = orders.find((o) => o.id === order_id).confirmed_data;
+  assert.equal(cd.verduurzamingsdoel, "laagste_investering");
+  assert.equal(cd.max_budget_eur, 15000, "een bedrag als tekst hoort als getal in de bestelling te staan");
+  assert.equal(cd.gemeentelijke_subsidie_eur, 1200);
+  assert.equal(cd.verbouwing, "ja");
+});
+
+test("onzin in de voorkeuren komt er niet in, en houdt de bestelling niet tegen", async (t) => {
+  const { basis, maak } = await opzet(t);
+  const od = await (await maak(GELDIG)).json();
+  const token = new URL(od.url).searchParams.get("overdracht");
+
+  const r = await fetch(`${basis}/api/overdracht/${token}/bestellen`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      accept_terms: true,
+      max_budget_eur: "veel",
+      gemeentelijke_subsidie_eur: "",
+      verbouwing: "misschien",
+    }),
+  });
+  assert.equal(r.status, 201, "een onleesbaar bedrag mag de bestelling niet blokkeren");
+  const { order_id } = await r.json();
+
+  const orders = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "full_orders.json"), "utf-8")).orders;
+  const cd = orders.find((o) => o.id === order_id).confirmed_data;
+  assert.equal(cd.max_budget_eur, undefined);
+  assert.equal(cd.gemeentelijke_subsidie_eur, undefined);
+  assert.equal(cd.verbouwing, undefined, "alleen ja of nee; de rekenkern kent niets anders");
+});

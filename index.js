@@ -1094,7 +1094,7 @@ export function createTenantApp(config) {
    * (OVERDRACHT_PRIJS_EUR, anders de gewone prijs). De adviseur ziet dat
    * bedrag niet: de partner bepaalt zelf wat hij doorrekent.
    */
-  function createOverdrachtOrder({ req, sessie, doel = "" }) {
+  function createOverdrachtOrder({ req, sessie, doel = "", voorkeuren = {} }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const od = sessie.overdracht || {};
@@ -1108,7 +1108,22 @@ export function createTenantApp(config) {
     const monthUsage = incrementInternalQuota(dataDir);
     const dagGebruik = verhoogDagteller(dataDir);
     const prijs = Number(process.env.OVERDRACHT_PRIJS_EUR || config?.payment?.priceEur || 30);
-    const confirmedData = normalizeConfirmedDataInput(doel ? { verduurzamingsdoel: doel } : {});
+    // ALLE VOORKEUREN, NIET ALLEEN HET DOEL.
+    //
+    // Hier stond alleen het doel. De adviseur vult op het scherm ook een
+    // maximumbudget, een gemeentelijke subsidie en de vraag naar een geplande
+    // verbouwing in, en het snelle rapport dat hij op datzelfde scherm ziet
+    // rekent daar wél mee (epa_app.js stuurt ze naar /api/mid/stream). Het
+    // volledige rapport dat hij hier bestelt kreeg ze niet. Twee documenten
+    // over dezelfde woning, met andere scenario's -- en niets dat dat meldt.
+    //
+    // De velden zelf worden hier niet gekeurd: dat doet de report-api
+    // (lib/confirmed_data.js), die een bedrag buiten zijn grenzen weglaat in
+    // plaats van klemt. Hier alleen doorgeven wat er binnenkwam.
+    const confirmedData = normalizeConfirmedDataInput({
+      ...(doel ? { verduurzamingsdoel: doel } : {}),
+      ...voorkeuren,
+    });
 
     createOrder({
       id: orderId,
@@ -2685,7 +2700,20 @@ export function createTenantApp(config) {
       const bestaand = bestellingVanOverdracht(sessie.overdracht.id);
       if (bestaand) return res.json({ order_id: bestaand.id, al_besteld: true, mail_naar: maskeerEmail(sessie.overdracht.adviseur_email) });
 
-      const uit = createOverdrachtOrder({ req, sessie, doel });
+      // De drie overige voorkeuren. Net als `doel` zeggen ze niets over de
+      // woning -- het .epa blijft leidend -- maar over wat de klant wil en
+      // kan. Ze gaan ongekeurd door naar de report-api, die ze valideert.
+      const voorkeuren = {};
+      for (const veld of ["max_budget_eur", "gemeentelijke_subsidie_eur"]) {
+        const ruw = req.body?.[veld];
+        if (ruw === null || ruw === undefined || ruw === "") continue;
+        const getal = Number(ruw);
+        if (Number.isFinite(getal)) voorkeuren[veld] = Math.round(getal);
+      }
+      const verbouwing = String(req.body?.verbouwing || "").trim();
+      if (verbouwing === "ja" || verbouwing === "nee") voorkeuren.verbouwing = verbouwing;
+
+      const uit = createOverdrachtOrder({ req, sessie, doel, voorkeuren });
       updatePrefillSession(sessie.token, { bestelling_id: uit.order_id });
       return res.status(201).json({ ...uit, al_besteld: false, mail_naar: maskeerEmail(sessie.overdracht.adviseur_email) });
     } catch (e) {
