@@ -2577,6 +2577,11 @@ export function createTenantApp(config) {
         adviseur_email: velden.adviseur_email,
         dossier_id: velden.dossier_id,
         terug_url: velden.terug_url,
+        // Wat de partner uit zijn eigen dossier meegaf. De pagina vult het
+        // voor; de adviseur kan het wijzigen, en wat hij op het scherm ziet
+        // is wat er in het rapport komt (de bestelling stuurt de stand van
+        // het scherm mee, niet deze waarden).
+        voorkeuren: velden.voorkeuren,
       },
       ingest: { preview: j.preview || null, labelsprongen: j.labelsprongen || null, doorrekening: j.doorrekening || null },
     });
@@ -2660,6 +2665,7 @@ export function createTenantApp(config) {
       labelsprongen: sessie.ingest?.labelsprongen || null,
       doorrekening: sessie.ingest?.doorrekening || null,
       terug_url: sessie.overdracht.terug_url || null,
+      voorkeuren: sessie.overdracht.voorkeuren || {},
       mail_naar: maskeerEmail(sessie.overdracht.adviseur_email),
       verloopt_op: sessie.expires_at,
       bestelling: order ? { bestelling_id: order.id, status: overdrachtStand(order) } : null,

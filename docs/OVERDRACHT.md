@@ -53,7 +53,12 @@ browser of in de link.
   "adviseur_id": "ADV-1042",
   "adviseur_email": "adviseur@voorbeeld.nl",
   "dossier_id": "DOS-2026-0077",
-  "terug_url": "https://app.softbee.nl/dossiers/77"
+  "terug_url": "https://app.softbee.nl/dossiers/77",
+
+  "doel": "kortste_terugverdientijd",
+  "max_budget_eur": 15000,
+  "gemeentelijke_subsidie_eur": 1200,
+  "verbouwing": "ja"
 }
 ```
 
@@ -64,6 +69,25 @@ browser of in de link.
 | `adviseur_email` | ja | Waar het rapport heen gaat. |
 | `dossier_id` | nee | Uw kenmerk van het dossier of de opname, voor support. Zelfde tekens als `adviseur_id`. |
 | `terug_url` | nee | Waar de knop "Terug naar Softbee" heen gaat. Alleen `https` op uw eigen domein. |
+| `doel` | nee | Waar de klant op let: `laagste_investering`, `kortste_terugverdientijd` of `hoogste_rendement`. |
+| `max_budget_eur` | nee | Maximaal te besteden bedrag, netto na subsidie. Heel getal van 1.000 tot 100.000. |
+| `gemeentelijke_subsidie_eur` | nee | Gemeentelijke of provinciale subsidie die de klant zelf heeft opgezocht. Heel getal van 0 tot 50.000; wij rekenen die regelingen niet zelf op. |
+| `verbouwing` | nee | `ja` of `nee`. Staat er een verbouwing gepland, dan zet het advies isolatie eerder in de volgorde. |
+
+### Over die laatste vier
+
+Ze zijn optioneel en ze zeggen niets over de woning: daarvoor is het .epa
+leidend. Ze gaan over wat de klant wil en kan, en dat weet u vaak al uit uw
+eigen dossier. Stuurt u ze mee, dan staan ze voorgevuld op de pagina en hoeft
+uw adviseur ze niet over te typen.
+
+Hij kan ze wél wijzigen. Wat op het scherm staat op het moment dat hij het
+rapport opvraagt of bestelt, is wat erin terechtkomt -- niet per se wat u
+meestuurde.
+
+Een waarde die niet klopt wordt geweigerd met een `field_error`, niet stil
+weggelaten. Anders zou een bedrag uit uw dossier verdwijnen zonder dat u het
+merkt.
 
 **Antwoord `201`:**
 

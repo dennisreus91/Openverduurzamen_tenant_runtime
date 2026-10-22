@@ -340,3 +340,68 @@ test("onzin in de voorkeuren komt er niet in, en houdt de bestelling niet tegen"
   assert.equal(cd.gemeentelijke_subsidie_eur, undefined);
   assert.equal(cd.verbouwing, undefined, "alleen ja of nee; de rekenkern kent niets anders");
 });
+
+// --- De partner mag de voorkeuren meesturen -------------------------------
+//
+// WAAROM DIT ERBIJ KWAM (22 oktober 2026)
+// Softbee weet uit zijn eigen dossier vaak al waar de klant op let en wat hij
+// kan besteden. Dat liet hij de adviseur overtypen op onze pagina -- en wie
+// doorklikt zonder iets in te vullen, krijgt een rapport zonder voorkeuren.
+//
+// Ze blijven optioneel en te wijzigen: de pagina vult ze voor, de adviseur
+// houdt het laatste woord, en de bestelling stuurt de stand van het scherm
+// mee. Deze velden zijn dus een startwaarde, geen opdracht.
+//
+// Fout melden en niet stil weglaten: dit is een koppeling tussen twee
+// systemen. Een bedrag dat hier verdwijnt zonder bericht, verdwijnt ook uit
+// het rapport, en de partner ziet aan niets dat zijn dossierwaarde niet is
+// aangekomen.
+
+test("de voorkeuren uit de overdracht komen terug op de pagina", async (t) => {
+  const { basis, maak } = await opzet(t);
+  const r = await maak({
+    ...GELDIG,
+    doel: "kortste_terugverdientijd",
+    max_budget_eur: 15000,
+    gemeentelijke_subsidie_eur: "1200",
+    verbouwing: "ja",
+  });
+  assert.equal(r.status, 201);
+  const token = new URL((await r.json()).url).searchParams.get("overdracht");
+
+  const pagina = await (await fetch(`${basis}/api/overdracht/${token}`)).json();
+  assert.deepEqual(pagina.voorkeuren, {
+    verduurzamingsdoel: "kortste_terugverdientijd",
+    verbouwing: "ja",
+    max_budget_eur: 15000,
+    gemeentelijke_subsidie_eur: 1200,
+  });
+});
+
+test("zonder voorkeuren blijft het veld leeg, niet half gevuld", async (t) => {
+  const { basis, maak } = await opzet(t);
+  const token = new URL((await (await maak(GELDIG)).json()).url).searchParams.get("overdracht");
+  const pagina = await (await fetch(`${basis}/api/overdracht/${token}`)).json();
+  assert.deepEqual(pagina.voorkeuren, {});
+});
+
+test("een voorkeur die niet klopt wordt gemeld, niet weggelaten", async (t) => {
+  const { maak } = await opzet(t);
+
+  const fout = async (body, veld) => {
+    const r = await maak({ ...GELDIG, ...body });
+    assert.equal(r.status, 400, `verwachtte een afwijzing voor ${veld}`);
+    const j = await r.json();
+    assert.ok(j.field_errors?.[veld], `geen veldfout voor ${veld}: ${JSON.stringify(j.field_errors)}`);
+  };
+
+  await fout({ doel: "zo_duur_mogelijk" }, "doel");
+  await fout({ verbouwing: "misschien" }, "verbouwing");
+  await fout({ max_budget_eur: 50 }, "max_budget_eur");
+  await fout({ max_budget_eur: "veel" }, "max_budget_eur");
+  await fout({ gemeentelijke_subsidie_eur: -1 }, "gemeentelijke_subsidie_eur");
+
+  // Nul is een opgave en geen fout: de klant zocht het op en er is niets.
+  const goed = await maak({ ...GELDIG, gemeentelijke_subsidie_eur: 0 });
+  assert.equal(goed.status, 201);
+});
