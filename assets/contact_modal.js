@@ -269,8 +269,14 @@
         // instemming koppelt.
         vak.required = false;
         vak.setAttribute("data-contact-akkoord", "");
-        vak.style.cssText = "margin-top:.2rem;flex:0 0 auto;";
+        // MAAT EXPLICIET, want de tenant-stylesheets zetten `input { width:100% }`
+        // voor de formuliervelden. Zonder deze regel werd het vinkje even breed
+        // als de hele rij (gemeten: 500 px) en werd de tekst ernaast tot een
+        // kolom van een letter breed geperst. `flex:0 0 auto` helpt daar niet
+        // tegen: dat regelt het groeien en krimpen, niet de breedte zelf.
+        vak.style.cssText = "margin-top:.2rem;flex:0 0 auto;width:18px;height:18px;";
         const span = document.createElement("span");
+        span.style.cssText = "flex:1 1 auto;min-width:0;";
         // "Optioneel:" VOORAAN, niet achteraan. Een vinkje dat verplicht oogt
         // wordt "voor de zekerheid" aangezet, en dan is de toestemming net zo
         // min vrij gegeven als toen hij echt verplicht was. Achteraan belandde
