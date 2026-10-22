@@ -2544,7 +2544,16 @@ export function createTenantApp(config) {
     // en niet de adviseur straks als een link die niet werkt.
     let r;
     try {
-      r = await leesBestandBijReportApi("/api/epa/ingest", { epa_base64: velden.epa_base64 });
+      // `validatieformulier: true`: de adviseur krijgt straks hetzelfde
+      // scherm als iemand die het bestand zelf uploadt -- met de luchtfoto
+      // en de velden die een opname niet kent. Zonder deze vlag levert de
+      // .epa-route alleen het model, en dan moet de pagina van de partner
+      // een eigen formulier bouwen. Dat was precies het verschil dat de twee
+      // frontends uit elkaar liet lopen.
+      r = await leesBestandBijReportApi("/api/epa/ingest", {
+        epa_base64: velden.epa_base64,
+        validatieformulier: true,
+      });
     } catch (e) {
       if (e?.geenRenderUrl) return res.status(500).json({ error: "De rapportdienst is niet ingesteld.", code: "niet_ingesteld" });
       const timedOut = e?.name === "AbortError";
@@ -2583,7 +2592,18 @@ export function createTenantApp(config) {
         // het scherm mee, niet deze waarden).
         voorkeuren: velden.voorkeuren,
       },
-      ingest: { preview: j.preview || null, labelsprongen: j.labelsprongen || null, doorrekening: j.doorrekening || null },
+      ingest: {
+        preview: j.preview || null,
+        labelsprongen: j.labelsprongen || null,
+        doorrekening: j.doorrekening || null,
+        // Het controleformulier, zodat de pagina bij het openen van de link
+        // precies hetzelfde kan tonen als na een eigen upload.
+        validation_form: j.validation_form || null,
+        luchtfoto: j.luchtfoto || null,
+        request_id: j.request_id || null,
+        source_facts: j.source_facts || null,
+        address: j.address || null,
+      },
     });
     console.log(`[tenant-runtime] overdracht: ${overdrachtId} aangemaakt (adviseur ${velden.adviseur_id})`);
 
@@ -2664,6 +2684,16 @@ export function createTenantApp(config) {
       preview: sessie.ingest?.preview || null,
       labelsprongen: sessie.ingest?.labelsprongen || null,
       doorrekening: sessie.ingest?.doorrekening || null,
+      // Alles wat de pagina nodig heeft om hetzelfde controlescherm te tonen
+      // als na een eigen upload. Het blijft een WEERGAVE: de woninggegevens
+      // zijn op dit scherm niet te wijzigen, want het .epa is leidend
+      // (afspraak met Softbee, 15 oktober 2026). De voorkeuren hieronder
+      // zijn dat wel.
+      validation_form: sessie.ingest?.validation_form || null,
+      luchtfoto: sessie.ingest?.luchtfoto || null,
+      request_id: sessie.ingest?.request_id || null,
+      source_facts: sessie.ingest?.source_facts || null,
+      address: sessie.ingest?.address || null,
       terug_url: sessie.overdracht.terug_url || null,
       voorkeuren: sessie.overdracht.voorkeuren || {},
       mail_naar: maskeerEmail(sessie.overdracht.adviseur_email),
