@@ -290,7 +290,21 @@
         }
         rij.appendChild(vak);
         rij.appendChild(span);
-        if (submitBtn && submitBtn.parentNode) submitBtn.parentNode.insertBefore(rij, submitBtn);
+        // BOVEN DE KNOPPENRIJ, NIET ERIN.
+        //
+        // Dit zette de regel vlak voor de verstuurknop, en die staat in
+        // .contactModal__actions -- een flexrij met de knoppen rechts. Een
+        // zin van twee regels komt daar tussen de twee knoppen te staan, en
+        // omdat een flexrij zijn kinderen even hoog maakt, rekten "Annuleren"
+        // en "Versturen" mee tot blokken van ruim 200 pixels, met de tekst
+        // eroverheen en een horizontale schuifbalk eronder. Live gezien op de
+        // Softbee-pagina, 22 oktober 2026.
+        //
+        // De toestemming hoort boven de knoppen: je leest hem voordat je
+        // verstuurt.
+        const acties = (submitBtn && submitBtn.closest(".contactModal__actions")) || null;
+        if (acties && acties.parentNode) acties.parentNode.insertBefore(rij, acties);
+        else if (submitBtn && submitBtn.parentNode) submitBtn.parentNode.insertBefore(rij, submitBtn);
         else form.appendChild(rij);
         akkoordVak = vak;
       } catch (_) {
