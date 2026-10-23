@@ -878,6 +878,14 @@ export function createTenantApp(config) {
     // builds the full report from the measured assessment instead of an
     // EP-Online/BAG lookup.
     if (order.epa_model) reqBody.epa_model = order.epa_model;
+    // WAT DE ADVISEUR CORRIGEERDE aan ons uitlezen van zijn .epa. Apart van
+    // het model en niet erin verwerkt: zo blijft bewaard wat de opname zei
+    // EN wat de adviseur ervan maakte. De report-api legt ze over het model
+    // voordat hij rekent, dus het volledige rapport komt op dezelfde
+    // getallen uit als het snelle rapport dat hij op het scherm zag.
+    if (order.opname_correcties && Object.keys(order.opname_correcties).length) {
+      reqBody.opname_correcties = order.opname_correcties;
+    }
 
     const t0 = Date.now();
     const ac = new AbortController();
@@ -942,7 +950,28 @@ export function createTenantApp(config) {
     }));
   }
 
-  async function createPaymentOrder({ req, email, address, confirmedData, sourceMeta = null, epaModel = null }) {
+  /**
+   * De correcties van de adviseur uit een verzoek, als platte tabel.
+   *
+   * Alleen de VORM wordt hier bewaakt -- paden, grenzen en keuzelijsten
+   * controleert de report-api (lib/epa_correcties.js), die ook de enige is
+   * die weet welke velden bestaan. Hier blijft het bij: het moet een object
+   * zijn met eenvoudige waarden, en niet eindeloos groot.
+   */
+  function leesOpnameCorrecties(bron) {
+    if (!bron || typeof bron !== "object" || Array.isArray(bron)) return null;
+    const uit = {};
+    for (const [pad, waarde] of Object.entries(bron).slice(0, 80)) {
+      if (!/^[a-z_]+(\.[a-z0-9_]+){1,3}$/i.test(pad)) continue;
+      const soort = typeof waarde;
+      if (waarde === null || soort === "string" || soort === "number" || soort === "boolean") {
+        uit[pad] = soort === "string" ? waarde.slice(0, 80) : waarde;
+      }
+    }
+    return Object.keys(uit).length ? uit : null;
+  }
+
+  async function createPaymentOrder({ req, email, address, confirmedData, sourceMeta = null, epaModel = null, opnameCorrecties = null }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const downloadToken = newOrderToken();
@@ -974,6 +1003,7 @@ export function createTenantApp(config) {
       address,
       confirmed_data: confirmedData,
       epa_model: epaModel || null,
+      opname_correcties: opnameCorrecties || null,
       payment: { id: payment.id, status: payment.status, checkout_url: payment.checkout_url },
       report_html: "",
       pdf_filename: "",
@@ -1015,7 +1045,7 @@ export function createTenantApp(config) {
    * existing processOrderById flow immediately runs render → PDF →
    * mail. Used by /api/internal/full/render for WoonWijzerWinkel staff.
    */
-  async function createInternalOrder({ req, email, address, confirmedData, epaModel = null, sourceMeta = null }) {
+  async function createInternalOrder({ req, email, address, confirmedData, epaModel = null, sourceMeta = null, opnameCorrecties = null }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
     const downloadToken = newOrderToken();
@@ -1045,6 +1075,7 @@ export function createTenantApp(config) {
       // report-api, die dan met de gemeten schil rekent in plaats van met
       // schattingen uit openbare bronnen.
       epa_model: epaModel || null,
+      opname_correcties: opnameCorrecties || null,
       payment: { id: null, status: "internal", checkout_url: null },
       report_html: "",
       pdf_filename: "",
@@ -1137,6 +1168,10 @@ export function createTenantApp(config) {
       address: sessie.address || {},
       confirmed_data: confirmedData,
       epa_model: sessie.epa_model || null,
+      // Wat de adviseur aan ons uitlezen corrigeerde, op het scherm waar hij
+      // net vandaan komt. Zonder dit rekent het volledige rapport met de
+      // oorspronkelijke uitlezing en staat er iets anders in dan hij zag.
+      opname_correcties: leesOpnameCorrecties(req.body?.opname_correcties),
       payment: { id: null, status: "op_rekening", checkout_url: null },
       report_html: "",
       pdf_filename: "",
@@ -1950,6 +1985,7 @@ export function createTenantApp(config) {
 
       const payload = await createInternalOrder({
         req, email, address, confirmedData, epaModel,
+        opnameCorrecties: leesOpnameCorrecties(req.body?.opname_correcties),
         sourceMeta: {
           tenant_id: config.id,
           request_id: String(req.body?.request_id || "").trim(),
@@ -2492,6 +2528,7 @@ export function createTenantApp(config) {
         confirmed_data: confirmedData,
         source_facts: req.body?.source_facts && typeof req.body.source_facts === "object" ? req.body.source_facts : null,
         epa_model: epaModel,
+        opname_correcties: leesOpnameCorrecties(req.body?.opname_correcties),
       });
       return res.json({ handoff_token: session.token, start_url: `${baseUrl}/full_start.html?handoff=${encodeURIComponent(session.token)}` });
     } catch (e) { return res.status(500).json({ error: e?.message || String(e) }); }
@@ -2607,6 +2644,10 @@ export function createTenantApp(config) {
         // Het controleformulier, zodat de pagina bij het openen van de link
         // precies hetzelfde kan tonen als na een eigen upload.
         validation_form: j.validation_form || null,
+        // Welke velden de adviseur mag bijstellen, met hun grenzen. Komt uit
+        // de report-api, die ook de controle doet -- zo kan er geen veld in
+        // het scherm staan dat de server daarna weigert.
+        corrigeerbare_velden: j.corrigeerbare_velden || null,
         luchtfoto: j.luchtfoto || null,
         request_id: j.request_id || null,
         source_facts: j.source_facts || null,
@@ -2698,6 +2739,7 @@ export function createTenantApp(config) {
       // (afspraak met Softbee, 15 oktober 2026). De voorkeuren hieronder
       // zijn dat wel.
       validation_form: sessie.ingest?.validation_form || null,
+      corrigeerbare_velden: sessie.ingest?.corrigeerbare_velden || null,
       luchtfoto: sessie.ingest?.luchtfoto || null,
       request_id: sessie.ingest?.request_id || null,
       source_facts: sessie.ingest?.source_facts || null,
@@ -2822,6 +2864,10 @@ export function createTenantApp(config) {
         address: session.address,
         confirmedData: normalizeConfirmedDataInput(session.confirmed_data || {}),
         epaModel: session.epa_model || null,
+        // Uit de handoff als ze daar al in zaten, anders uit dit verzoek: de
+        // adviseur kan ze ook nog op het bestelscherm hebben aangepast.
+        opnameCorrecties:
+          leesOpnameCorrecties(req.body?.opname_correcties) || leesOpnameCorrecties(session.opname_correcties),
         sourceMeta: { source: session.source || "mid", tenant_id: config.id, request_id: session.request_id || "", cta_source: session.cta_source || "", handoff_token: session.token, validated_address: session.validated_address || null, source_facts: session.source_facts || null },
       });
       return res.json(payload);
@@ -2844,6 +2890,7 @@ export function createTenantApp(config) {
 
       const payload = await createPaymentOrder({
         req, email, address, confirmedData,
+        opnameCorrecties: leesOpnameCorrecties(req.body?.opname_correcties),
         sourceMeta: { source: "manual_full_start", tenant_id: config.id, request_id: String(req.body?.request_id || "").trim() },
       });
       return res.json(payload);
