@@ -70,7 +70,7 @@
       // Remember the opener so close() can hand focus back (a11y).
       lastFocused = document.activeElement;
       // Restore form visibility — a prior successful submit hides these.
-      $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, .contactModal__lead").forEach(function (el) {
+      $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, .contactModal__lead, [data-contact-akkoord-rij]").forEach(function (el) {
         el.style.display = "";
       });
       successBox?.setAttribute("hidden", "");
@@ -389,7 +389,12 @@
         if (counter) counter.textContent = "0/" + MAX_MESSAGE;
         // Hide everything except the success box so the user gets a clean
         // confirmation. The form is restored next time the modal opens.
-        $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions").forEach(function (el) {
+        // De toestemmingsregel staat er ook nog: die wordt los aangemaakt in
+        // plaatsToestemming() en draagt geen van de klassen hierboven. Zonder
+        // het laatste stukje van deze lijst bleef na het versturen een
+        // aanvinkbaar vakje onder de bedankregel staan -- een keuze die niets
+        // meer doet, bij een aanvraag die al verstuurd is.
+        $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, [data-contact-akkoord-rij]").forEach(function (el) {
           el.style.display = "none";
         });
         // Also collapse the lead paragraph so the modal feels resolved.
