@@ -207,7 +207,13 @@
         leadEl.innerHTML = adviesModus
           ? "Gratis extra dienst: de specialisten van " + partner + " zetten dit rapport om in concrete maatregelen en nemen de uitvoering volledig uit handen. Laat uw gegevens achter; zij ontvangen het snelle rapport en nemen contact met u op. De financiering regelt u met uw hypotheekadviseur."
           : rapportModus
-            ? "Het volledige rapport gaat per e-mail naar u toe: de passende maatregelen, de volgorde, de kosten, de subsidies en wat het met uw woningwaarde doet. Met het vinkje hieronder mogen de specialisten van " + partner + " het rapport met u doornemen."
+            // GEEN PARTNERNAAM IN DEZE ZIN (Dennis, 23 oktober 2026).
+            // Dit is het bestelvenster van het rapport, niet de adviesaanvraag:
+            // de bezoeker koopt hier iets van de tenant, en de naam van de
+            // opvolgpartner leidt daarvan af. Hij staat wel in de
+            // toestemmingstekst bij het vinkje zelf, en daar hoort hij ook:
+            // instemming met doorgifte vraagt dat je weet aan wie.
+            ? "Het volledige rapport gaat per e-mail naar u toe: de passende maatregelen, de volgorde, de kosten, de subsidies en wat het met uw woningwaarde doet. Met het vinkje hieronder mag een specialist van onze verduurzamingspartner het rapport met u doornemen."
             : origineel.lead;
       }
       if (successBox) {

@@ -2076,15 +2076,23 @@ export function createTenantApp(config) {
   // gedeelde pagina, en een tenant die hem op zijn eigen website wil hebben
   // zet `contact.privacyUrl` en overschrijft dit.
   function leadToestemming() {
-    // De partij die opvolgt, niet per se de tenant zelf. Bij
-    // OpenVerduurzamen is dat WoonWijzerWinkel: de bezoeker geeft
-    // toestemming om het rapport met HEN door te spreken, en dan hoort die
-    // naam in de zin te staan en niet die van het merk op de pagina.
-    const partner = String(config.report?.adviesPartner || config.brand?.name || "deze partner").trim();
+    // HET MERK OP DE PAGINA, NIET DE OPVOLGPARTNER (Dennis, 23 oktober 2026).
+    //
+    // Hier stond `report.adviesPartner`. Op de pagina van OpenVerduurzamen las
+    // de bezoeker dan dat hij akkoord gaat met WoonWijzerWinkel -- een naam
+    // die hij nergens anders in het venster tegenkomt, als afsluiter van een
+    // bestelling bij OpenVerduurzamen. Nu staat er de naam waaronder de
+    // bezoeker de tool gebruikt, en "Wij" in de tweede zin.
+    //
+    // LET OP BIJ DE OVERSTAP NAAR ECHT GEBRUIK. Een toestemming hoort te
+    // noemen wie de gegevens krijgt. Zolang de lead naar een andere partij
+    // gaat dan het merk op de pagina, klopt deze zin alleen in de testfase;
+    // voor de livegang hoort die partij hier bij naam te staan.
+    const naam = String(config.brand?.name || config.report?.adviesPartner || "wij").trim();
     return {
       tekst:
-        `Ik ga ermee akkoord dat ${partner} mijn gegevens en mijn verduurzamingsadvies ` +
-        `ontvangt en contact met mij opneemt over het advies. ${partner} gaat zorgvuldig ` +
+        `Ik ga ermee akkoord dat ${naam} mijn gegevens en mijn verduurzamingsadvies ` +
+        `ontvangt en contact met mij opneemt over het advies. Wij gaan zorgvuldig ` +
         `met je gegevens om, zie de privacyverklaring.`,
       privacyUrl: String(config.contact?.privacyUrl || "").trim()
         || (templates.privacy ? "/privacyverklaring.html" : ""),
