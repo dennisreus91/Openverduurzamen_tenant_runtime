@@ -2798,6 +2798,11 @@ export function createTenantApp(config) {
       }
       const verbouwing = String(req.body?.verbouwing || "").trim();
       if (verbouwing === "ja" || verbouwing === "nee") voorkeuren.verbouwing = verbouwing;
+      // Zou de bewoner panelen bij laten plaatsen? Zelfde vorm, en om dezelfde
+      // reden expliciet genoemd: dit lijstje is een witte lijst, dus een veld
+      // dat er niet in staat komt stil niet aan.
+      const bijplaatsen = String(req.body?.zonnepanelen_bijplaatsen || "").trim();
+      if (bijplaatsen === "ja" || bijplaatsen === "nee") voorkeuren.zonnepanelen_bijplaatsen = bijplaatsen;
 
       const uit = createOverdrachtOrder({ req, sessie, doel, voorkeuren });
       updatePrefillSession(sessie.token, { bestelling_id: uit.order_id });
