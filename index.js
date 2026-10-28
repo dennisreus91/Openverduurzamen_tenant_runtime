@@ -3441,7 +3441,12 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         .then((uit) => {
           if (uit.gemeld) {
             console.log(`[lead] centraal opgeslagen id=${uit.id ?? "?"}`);
-          } else if (uit.reden !== "centraal_uit" && uit.reden !== "geen_toestemming") {
+            // "geen_toestemming" stond hier tot 28 oktober 2026 als stille
+            // uitzondering. Die reden bestaat niet meer: zo'n lead gaat nu
+            // gewoon mee, met toestemming false, en wordt daar bewaard zonder
+            // gemaild te worden. Een lead die niet aankomt is vanaf nu dus
+            // altijd een storing, en hoort dus altijd in de log.
+          } else if (uit.reden !== "centraal_uit") {
             console.warn(`[lead] centraal mislukt (${uit.reden})`);
           }
         })

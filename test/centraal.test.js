@@ -58,10 +58,22 @@ async function nepGateway({ vanaf = null } = {}) {
         res.end(JSON.stringify(data));
       };
       if (req.url === "/api/v1/leads") {
-        // De echte dienst weigert een lead zonder toestemming; die regel hoort
-        // ook in de nabootsing te staan, anders toetst de test hem nooit.
-        if (json?.toestemming !== true || !String(json?.toestemming_tekst || "").trim()) {
-          return antwoord(400, { fout: "ongeldige_invoer", fouten: { toestemming: "verplicht true" } });
+        // Zoals de echte dienst sinds 28 oktober 2026 (gateway/agent_api.py in
+        // ai_adviseur_centraal): toestemming is een boolean en mag false zijn
+        // -- de lead wordt dan bewaard maar niet gemaild. De tekst is alleen
+        // verplicht als er toestemming IS; zonder tekst weet niemand waar de
+        // klant ja op zei.
+        //
+        // Die regels horen hier te staan, anders toetst de test ze nooit en
+        // ontdekken we pas live dat de twee kanten uiteenlopen.
+        if (typeof json?.toestemming !== "boolean") {
+          return antwoord(400, { fout: "ongeldige_invoer", fouten: { toestemming: "true of false" } });
+        }
+        if (json.toestemming === true && !String(json?.toestemming_tekst || "").trim()) {
+          return antwoord(400, { fout: "ongeldige_invoer", fouten: { toestemming_tekst: "verplicht" } });
+        }
+        if (json.mailen === true && json.toestemming !== true) {
+          return antwoord(400, { fout: "ongeldige_invoer", fouten: { mailen: "alleen met toestemming" } });
         }
         return antwoord(201, { id: 7 });
       }
@@ -346,22 +358,33 @@ test("de klantgegevens en het kanaal", () => {
   assert.equal(p.extra.bron, "mid_report");
 });
 
-test("zonder toestemming wordt er niets gemeld", async () => {
-  // Dit is het geval zolang het vinkje nog niet in het formulier zit: de lead
-  // blijft een mail, zoals voorheen. Deze koppeling mag nooit de reden zijn dat
-  // er geen lead meer binnenkomt.
-  const uit = await metOmgeving(AAN("http://127.0.0.1:1"), () =>
+test("ook zonder toestemming wordt de lead gemeld, met toestemming false", async (t) => {
+  // TOT 28 OKTOBER 2026 GEBEURDE HIER NIETS, en dat was het gat: zo'n lead was
+  // alleen een mail en verdween daarna uit beeld -- niet te tellen, niet te
+  // matchen met wat de partner meldt. Besluit Dennis: ook die horen in de
+  // centrale database.
+  //
+  // Wat de toestemming nu bepaalt staat aan de andere kant (gateway/agent_api.py
+  // in ai_adviseur_centraal): bewaren mag, mailen en doorzetten naar een
+  // leadpartner niet.
+  const g = await nepGateway();
+  t.after(g.close);
+  const uit = await metOmgeving(AAN(g.url), () =>
     meldLead({ ...LEAD, toestemming: false }, CONFIG),
   );
-  assert.equal(uit.gemeld, false);
-  assert.equal(uit.reden, "geen_toestemming");
+  assert.equal(uit.gemeld, true);
+  assert.equal(g.ontvangen[0].body.toestemming, false, "de stand moet echt zijn, niet altijd true");
+  assert.equal(g.ontvangen[0].body.mailen, false, "zonder toestemming nooit laten mailen");
 });
 
-test("een aangevinkt vakje zonder tekst telt ook niet als toestemming", async () => {
+test("een aangevinkt vakje zonder tekst telt niet als toestemming", async () => {
+  // Zonder die tekst weten we niet waar iemand ja op zei. Dan is de
+  // toestemming niets waard, en melden we hem liever niet als gegeven.
   const uit = await metOmgeving(AAN("http://127.0.0.1:1"), () =>
     meldLead({ ...LEAD, toestemmingTekst: "   " }, CONFIG),
   );
-  assert.equal(uit.reden, "geen_toestemming");
+  assert.equal(uit.gemeld, false);
+  assert.equal(uit.reden, "toestemming_zonder_tekst");
 });
 
 test("een geslaagde lead komt binnen op /api/v1/leads", async (t) => {
