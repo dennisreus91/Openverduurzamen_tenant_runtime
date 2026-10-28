@@ -35,7 +35,7 @@ import { createMolliePayment, getMolliePayment, mollieTestmodus, refundMolliePay
 import { htmlToPdfBuffer } from "./lib/pdfbolt_client.js";
 import { runtimeVersie } from "./lib/runtime_versie.js";
 import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
-import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail } from "./lib/mail_client.js";
+import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail, sendBestelMelding, bestelMeldingAan } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession, updatePrefillSession, findPrefillSession } from "./lib/prefill_store.js";
 import {
   overdrachtAan, sleutelUitVerzoek, sleutelKlopt, terugHosts, valideerOverdracht, maskeerEmail,
@@ -1603,6 +1603,19 @@ export function createTenantApp(config) {
       order = updateOrder(orderId, { status: "mailed", mailed_at: nowIso(), processing_lock: false, last_step: "mail_done", error: "" });
       appendStep(orderId, "mail_done", { to: order.email });
       await meldAanCentraal(order);
+      // Bestelmelding aan de partner (opt-in via BESTEL_MELDING_EMAIL), zodat zijn CRM een
+      // rapportkoop uit hetzelfde formaat leest als een lead in plaats van uit de blind copy van
+      // de klantmail. Fire-and-forget: een mislukte melding mag de oplevering niet omgooien.
+      if (bestelMeldingAan()) {
+        const bestelOrder = order;
+        sendBestelMelding({ order: bestelOrder, config: mailConfigVoor(bestelOrder) })
+          .then((uit) => {
+            appendStep(bestelOrder.id, uit.sent ? "bestelmelding_verstuurd" : "bestelmelding_mislukt",
+              uit.sent ? {} : { reden: uit.reason });
+            if (!uit.sent) console.warn(`[tenant-runtime] bestelmelding mislukt (${uit.reason}) voor ${bestelOrder.id}`);
+          })
+          .catch(() => {});
+      }
       // Fire-and-forget: de melding herhaalt een paar keer met pauzes, en dat
       // hoort de verwerking niet op te houden. Mislukt hij, dan pakt de
       // herstelronde hem op.
@@ -3161,6 +3174,10 @@ export function createTenantApp(config) {
       // -----------------------------------------------------------
       const ctxIn = (body.context && typeof body.context === "object") ? body.context : {};
       let reportContext = null;
+      // Het adres voor het machineleesbare blok in de leadmail. Het contactformulier
+      // vraagt er niet om, maar bij een advies- of rapportaanvraag is het er wel; en
+      // zonder adres kan de partner de aanvraag niet in zijn CRM thuisbrengen.
+      let leadAdres = "";
       const attachments = [];
       // Ontvanger en teksten voor een adviesaanvraag (zie lib/advies_aanvraag.js).
       let mailOverrides = null;
@@ -3206,6 +3223,7 @@ export function createTenantApp(config) {
       // als de pdf niet lukt) naar config.adviceRequest.recipient.
       if (ctxIn.productType === "advies_aanvraag") {
         const addr = formatAddress(ctxIn.address);
+        if (addr) leadAdres = addr;
         // `soort` zegt WAT er gevraagd is. De tool van OpenVerduurzamen stuurt
         // "volledig_rapport" mee; zonder die waarde blijft het de
         // adviesaanvraag die het altijd was.
@@ -3263,6 +3281,7 @@ export function createTenantApp(config) {
       if (ctxIn.productType === "mid_report") {
         const rows = [];
         const addr = formatAddress(ctxIn.address);
+        if (addr) leadAdres = addr;
         if (addr) rows.push(["Adres", addr]);
         rows.push(...humanizeConfirmed(ctxIn.confirmedData));
 
@@ -3349,6 +3368,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
       if (ctxIn.productType === "full_start") {
         const rows = [];
         const addr = formatAddress(ctxIn.address);
+        if (addr) leadAdres = addr;
         if (addr) rows.push(["Adres", addr]);
         if (ctxIn.customerEmail) rows.push(["Opgegeven e-mail", String(ctxIn.customerEmail).slice(0, 200)]);
         rows.push(...humanizeConfirmed(ctxIn.confirmedData));
@@ -3366,6 +3386,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
             const rows = [];
             rows.push(["Ordernummer", order.id]);
             const addr = formatAddress(order.address);
+            if (addr) leadAdres = addr;
             if (addr) rows.push(["Adres", addr]);
             rows.push(...humanizeConfirmed(order.confirmed_data));
             rows.push(["Status", String(order.status || "")]);
@@ -3403,6 +3424,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         lastName,
         email,
         phone,
+        adres: leadAdres,
         message,
         sourcePage,
         config,
@@ -3429,9 +3451,11 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         {
           email, firstName, lastName, phone, message, sourcePage,
           soort: mailOverrides ? "advies_aanvraag" : "contact",
-          // Geen adres: het contactformulier vraagt er niet om, en reportContext
-          // draagt alleen een titel met rijen. Een veld dat altijd leeg is, is
-          // misleidender dan geen veld.
+          // Het adres alleen als het er is. Het contactformulier vraagt er niet om; bij een
+          // advies- of rapportaanvraag is het bekend, en dan hoort het erbij -- de partner kan
+          // een aanvraag zonder adres niet thuisbrengen. Een veld dat ALTIJD leeg is zou
+          // misleidender zijn dan geen veld; een veld dat soms gevuld is, is gewoon waar.
+          ...(leadAdres ? { adres: leadAdres } : {}),
           mailStatus: "verstuurd",
           toestemming: body.akkoord === true,
           toestemmingTekst: toestemming.tekst,
