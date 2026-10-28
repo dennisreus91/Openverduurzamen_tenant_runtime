@@ -2101,6 +2101,17 @@ export function createTenantApp(config) {
       runtime: runtimeVersie(),
       centraal: centraalAan(),
       toegang: toegangAan(),
+      // EEN tool, of twee ingangen? Deze vlag bepaalt waar een ingelogde adviseur uitkomt
+      // (`naLogin()`). Stond hij uit, dan ging wie via /intern inlogde naar het oude
+      // intakeformulier -- dat achterloopt op de tool op / -- terwijl wie zelf naar /
+      // ging de goede tool kreeg. Dat verschil was aan NIETS te zien: niet aan de pagina,
+      // niet aan /health, en alleen te merken via een inlog die je niet dagelijks doet.
+      // Bij de WoonWijzerWinkel stond hij een week uit (28 oktober 2026).
+      een_tool: eenToolAan(),
+      // Het plafond op het aantal volledige rapporten per dag, of null als er geen is.
+      // Zonder plafond kan een doorgeslagen aanroep een rekening maken zonder dat er
+      // iets aan te zien is; dat hoort van buiten af te lezen te zijn.
+      dagplafond: Number(config.features?.dagplafond) || null,
       // Kan deze tenant een pdf maken? Zonder PDFBOLT_API_KEY valt de
       // downloadknop onder het snelle rapport terug op de printdialoog en
       // krijgt de leadmail het rapport als html in plaats van als pdf --

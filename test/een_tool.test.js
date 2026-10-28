@@ -10,8 +10,14 @@
 // interne pagina gebruikte kreeg daardoor een ander rapport dan dezelfde
 // woning via de publieke kant -- zonder dat iets dat meldde.
 //
-// WoonWijzerWinkel houdt de oude indeling, dus dit mag geen standaardgedrag
-// worden. Vandaar beide kanten hieronder.
+// Dit mag geen standaardgedrag worden -- een tenant die de schakelaar niet zet
+// houdt de twee ingangen -- dus beide kanten staan hieronder.
+//
+// LET OP, 28 oktober 2026: hier stond "WoonWijzerWinkel houdt de oude
+// indeling". Dat was achterhaald, en die regel heeft de fout helpen vasthouden:
+// in de WWW-config ontbrak `eenTool`, een gastlogin kwam daardoor op het oude
+// formulier uit, en dit commentaar leek te zeggen dat dat zo hoorde. Alle vier
+// de tenants hebben de schakelaar nu aan.
 //
 // Run: npm test
 
@@ -69,4 +75,29 @@ test("zonder de schakelaar blijft de interne intakepagina de werkplek", async (t
   assert.equal(s.loginAntwoord.redirect, "/intern/full_start.html");
   assert.equal((await s.haal("/intern")).headers.get("location"), "/intern/full_start.html");
   assert.notEqual((await s.haal("/intern/full_start.html")).status, 302);
+});
+
+
+// ── Van buiten af te lezen ────────────────────────────────────────────────────
+//
+// WAAROM /health DEZE VLAGGEN NOEMT
+// De fout bij de WoonWijzerWinkel was een week onzichtbaar omdat er niets was
+// dat hem meldde: de pagina zag normaal uit, /health zweeg erover, en het
+// verschil was alleen te merken via een inlog die je niet dagelijks doet. De
+// sleutel staat in het Render-dashboard en de config in een andere repo, dus
+// van buiten af nakijken is de enige controle die blijft werken.
+test("/health noemt of de tenant een tool heeft en wat zijn dagplafond is", async (t) => {
+  const s = await tenant(t, { eenTool: true, dagplafond: 100 });
+  const d = await (await s.haal("/health")).json();
+  assert.equal(d.een_tool, true);
+  assert.equal(d.dagplafond, 100);
+});
+
+test("/health zegt ook wanneer er geen plafond is, in plaats van het veld weg te laten", async (t) => {
+  // Een ontbrekend veld leest als "oude runtime"; null leest als "geen plafond".
+  const s = await tenant(t);
+  const d = await (await s.haal("/health")).json();
+  assert.equal(d.een_tool, false);
+  assert.ok("dagplafond" in d, "het veld hoort er te staan");
+  assert.equal(d.dagplafond, null);
 });
