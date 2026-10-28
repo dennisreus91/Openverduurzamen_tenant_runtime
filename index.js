@@ -1841,6 +1841,32 @@ export function createTenantApp(config) {
     return Boolean(config.features?.eenTool);
   }
 
+  /**
+   * De gegevenspoort: de bezoeker laat eerst naam, e-mail en telefoonnummer achter,
+   * daarna is hij vrij om het snelle en het volledige rapport aan te vragen.
+   *
+   * WAAROM DIT BESTAAT
+   * Een publieke tenant heeft geen inlog, en elk ingevuld adres kost ons circa een euro
+   * aan Altum-data. De poort zet daar een naam bij voordat die rekening loopt. En hij
+   * levert precies de groep die we willen kunnen matchen: iemand die zijn gegevens
+   * achterlaat en zich later op eigen initiatief bij de partner meldt, is factureerbaar
+   * (besluit Dennis, 28-10-2026).
+   *
+   * WAT DE POORT NIET IS
+   * Geen toestemming. De poort vraagt gegevens om de dienst te kunnen leveren; de
+   * toestemming om die gegevens met de partner te delen is een eigen, expliciete stap bij
+   * elke rapportaanvraag. Die twee door elkaar halen levert een toestemming op die je moet
+   * geven om de dienst te krijgen, en dat is geen vrije toestemming -- zie de
+   * privacyverklaring die deze runtime zelf bedient ("opvolging -- ALLEEN als u daar
+   * toestemming voor geeft").
+   *
+   * EEN INGELOGDE ADVISEUR GAAT VRIJUIT, net als bij de rem op de dure routes: Maurice en
+   * Wouter testen met hun gastlogin en horen geen leadformulier voor zichzelf te zien.
+   */
+  function gegevensPoortAan() {
+    return Boolean(config.features?.gegevensPoort);
+  }
+
   /** Waar een ingelogde adviseur hoort uit te komen. */
   function naLogin() {
     return eenToolAan() ? "/" : "/intern/full_start.html";
@@ -2108,6 +2134,10 @@ export function createTenantApp(config) {
       // niet aan /health, en alleen te merken via een inlog die je niet dagelijks doet.
       // Bij de WoonWijzerWinkel stond hij een week uit (28 oktober 2026).
       een_tool: eenToolAan(),
+      // Staat de gegevenspoort aan? Van buiten af te lezen, om dezelfde reden als
+      // `een_tool`: een vlag die alleen in een andere repo staat en alleen te merken is
+      // door de flow te doorlopen, blijft bij een verkeerde stand te lang onzichtbaar.
+      gegevens_poort: gegevensPoortAan(),
       // Het plafond op het aantal volledige rapporten per dag, of null als er geen is.
       // Zonder plafond kan een doorgeslagen aanroep een rekening maken zonder dat er
       // iets aan te zien is; dat hoort van buiten af te lezen te zijn.
@@ -2159,8 +2189,13 @@ export function createTenantApp(config) {
     };
   }
 
-  app.get("/api/tenant", (_req, res) => res.json({
+  app.get("/api/tenant", (req, res) => res.json({
     id: config.id,
+    // Moet de pagina de gegevenspoort tonen? Twee dingen bij elkaar: staat hij aan voor
+    // deze tenant, en is de bezoeker geen ingelogde adviseur. Die tweede voorwaarde hoort
+    // hier en niet in de pagina: het antwoord hangt aan een HttpOnly-cookie, die de pagina
+    // zelf niet kan lezen.
+    gegevensPoort: gegevensPoortAan() && !readInternalSession(req),
     brand: config.brand,
     contact: config.contact,
     // Het contactvenster leest de toestemmingstekst hier op, zodat hij niet in vier
@@ -3430,7 +3465,19 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         }
       }
 
-      await sendLeadEmail({
+      // DE POORTAANVRAAG WORDT NIET GEMAILD.
+      //
+      // De poort is registratie, geen contactverzoek: de bezoeker heeft nog niets
+      // gevraagd, hij wil de tool gebruiken. Zou deze route hem mailen, dan krijgt de
+      // partner een bericht over iemand die nog geen adres heeft ingevuld -- en bij elke
+      // bezoeker opnieuw. Hij gaat wel naar de centrale database, want daar is de poort
+      // voor: weten wie er langskwam, zodat die later te matchen is.
+      //
+      // Toestemming staat hier los van. Geeft de bezoeker die later bij een
+      // rapportaanvraag, dan is dat een eigen verzoek aan deze route en gaat er dan wel
+      // een mail uit, met het rapport erbij.
+      const isPoort = ctxIn.productType === "rapport_toegang";
+      if (!isPoort) await sendLeadEmail({
         firstName,
         lastName,
         email,
@@ -3461,13 +3508,13 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
       meldLead(
         {
           email, firstName, lastName, phone, message, sourcePage,
-          soort: mailOverrides ? "advies_aanvraag" : "contact",
+          soort: isPoort ? "rapport_toegang" : mailOverrides ? "advies_aanvraag" : "contact",
           // Het adres alleen als het er is. Het contactformulier vraagt er niet om; bij een
           // advies- of rapportaanvraag is het bekend, en dan hoort het erbij -- de partner kan
           // een aanvraag zonder adres niet thuisbrengen. Een veld dat ALTIJD leeg is zou
           // misleidender zijn dan geen veld; een veld dat soms gevuld is, is gewoon waar.
           ...(leadAdres ? { adres: leadAdres } : {}),
-          mailStatus: "verstuurd",
+          mailStatus: isPoort ? "niet_verstuurd" : "verstuurd",
           toestemming: body.akkoord === true,
           toestemmingTekst: toestemming.tekst,
         },

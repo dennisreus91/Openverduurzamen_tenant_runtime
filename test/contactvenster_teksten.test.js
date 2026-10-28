@@ -77,7 +77,12 @@ test("de regel die de test bewaakt bestaat ook echt", () => {
 
 test("het bestelvenster noemt de adviespartner niet bij naam", () => {
   const aankondiging = MODAL.slice(MODAL.indexOf("Het volledige rapport gaat per e-mail"));
-  const zin = aankondiging.slice(0, aankondiging.indexOf('"\n'));
+  // De regel afbakenen op het REGELEINDE, niet op een aanhalingsteken gevolgd door een
+  // LF. Die tweede vorm werkte tot 28 oktober 2026 en viel toen om: een bewerking zette
+  // het bestand in de werkmap op CRLF (git bewaart LF), de zoekopdracht vond niets meer,
+  // en de hele rest van het bestand werd "de zin" -- met een rode test over de naam van
+  // de adviespartner die daar niets mee te maken had.
+  const zin = aankondiging.split(/\r?\n/)[0];
   assert.match(zin, /een specialist van onze verduurzamingspartner/);
   assert.doesNotMatch(
     zin,

@@ -20,6 +20,50 @@
   const ENDPOINT = "/api/lead";
   const MAX_MESSAGE = 2000;
 
+  // TWEE STANDEN NAAST HET GEWONE CONTACTVENSTER (28 oktober 2026, publieke tenant).
+  //
+  // 1. DE POORT (bron "rapport_toegang"). Vooraan: naam, e-mail en telefoonnummer,
+  //    voordat de bezoeker een adres invult. Geen toestemmingsvinkje, want hier wordt
+  //    geen toestemming gevraagd -- de gegevens zijn nodig om de dienst te leveren, en
+  //    elk ingevuld adres kost ons geld. De aanvraag wordt centraal vastgelegd en NIET
+  //    gemaild; dat regelt de runtime op `context.productType`.
+  //
+  // 2. ALLEEN TOESTEMMING. Bij elke rapportaanvraag daarna. De gegevens kennen we al,
+  //    dus die velden gaan dicht en er blijft één vraag over: mag de partner ze krijgen
+  //    en contact opnemen om het rapport door te nemen? Dat is de expliciete stap die
+  //    Dennis wilde, en hij blijft een vrije keuze -- wie niet aanvinkt krijgt zijn
+  //    rapport net zo goed. Een toestemming die je moet geven om de dienst te krijgen is
+  //    geen toestemming, en de privacyverklaring die deze runtime bedient belooft het
+  //    tegendeel: "opvolging -- ALLEEN als u daar toestemming voor geeft".
+  //
+  // De gegevens uit stand 1 blijven in sessionStorage staan, zodat stand 2 ze niet
+  // opnieuw hoeft te vragen. Per tabblad en weg bij het sluiten: ze staan al bij ons in
+  // de database, dit is alleen om de bezoeker niet twee keer hetzelfde te laten typen.
+  const POORT_BRON = "rapport_toegang";
+  const BEWAARSLEUTEL = "ov_poort_gegevens";
+  const VELDEN = ["firstName", "lastName", "email", "phone"];
+
+  function bewaardeGegevens() {
+    try {
+      const ruw = sessionStorage.getItem(BEWAARSLEUTEL);
+      const uit = ruw ? JSON.parse(ruw) : null;
+      return uit && typeof uit === "object" && uit.email ? uit : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function bewaarGegevens(data) {
+    try {
+      const uit = {};
+      for (const veld of VELDEN) uit[veld] = data[veld] || "";
+      sessionStorage.setItem(BEWAARSLEUTEL, JSON.stringify(uit));
+    } catch (_) {
+      // Privévenster of geblokkeerde opslag: dan vraagt stand 2 de gegevens gewoon
+      // opnieuw. Minder prettig, niet stuk.
+    }
+  }
+
   function $(root, sel) { return root.querySelector(sel); }
   function $$(root, sel) { return Array.from(root.querySelectorAll(sel)); }
 
@@ -81,9 +125,59 @@
       // Tag where the user came from (CTA context) so WWW can see it in the email.
       const srcInput = $(modal, "[name='sourcePage']");
       if (srcInput) srcInput.value = source || "";
-      setTimeout(function () { firstField?.focus(); }, 30);
+      zetStand(source);
+      setTimeout(function () { (eersteZichtbareVeld() || submitBtn)?.focus(); }, 30);
       notifyHeightChange();
     }
+    /** Het eerste veld dat de bezoeker werkelijk kan invullen; in stand 2 zijn ze dicht. */
+    function eersteZichtbareVeld() {
+      return $$(modal, "[name='firstName'], [name='email'], [name='message']")
+        .find(function (el) { return el.offsetParent !== null; }) || null;
+    }
+
+    /** De rij waarin een veld staat, zodat het label meeverdwijnt met het invoervak. */
+    function rijVan(veld) {
+      return veld?.closest(".contactModal__field, label") || veld || null;
+    }
+
+    /**
+     * Zet het venster in de juiste stand. Zie de kop van dit bestand.
+     *
+     * Alles wat hier dichtgaat, gaat in open() weer open: die zet eerst alle rijen terug
+     * op zichtbaar. Zonder die volgorde blijft een veld dat in stand 2 dicht ging ook
+     * dicht als het venster daarna in stand 1 of als gewoon contactvenster opengaat --
+     * en dan vraagt de poort geen naam meer.
+     */
+    function zetStand(source) {
+      const poort = source === POORT_BRON;
+      const bekend = !poort ? bewaardeGegevens() : null;
+      const akkoordRij = $(modal, "[data-contact-akkoord-rij]");
+
+      // Stand 1: geen toestemmingsvraag, en geen opmerkingenveld -- de bezoeker heeft nog
+      // niets om op te merken; hij wil de tool gebruiken.
+      if (akkoordRij) akkoordRij.style.display = poort ? "none" : "";
+      const bericht = $(modal, "[name='message']");
+      if (bericht) {
+        const rij = rijVan(bericht);
+        if (rij) rij.style.display = poort ? "none" : "";
+      }
+
+      // Stand 2: de gegevens staan al bij ons, dus niet opnieuw vragen. De velden gaan
+      // dicht maar blijven in het formulier staan, met de bewaarde waarden erin: de
+      // runtime heeft ze nodig om de lead aan dezelfde klant te hangen.
+      for (const naam of VELDEN) {
+        const veld = form?.elements?.[naam];
+        if (!veld) continue;
+        if (bekend) veld.value = bekend[naam] || "";
+        const rij = rijVan(veld);
+        if (rij) rij.style.display = bekend ? "none" : "";
+      }
+      const grid = $(modal, ".contactModal__grid");
+      if (grid) grid.style.display = bekend ? "none" : "";
+      const sectie = $(modal, ".contactModal__sectionLabel");
+      if (sectie) sectie.style.display = bekend ? "none" : "";
+    }
+
     function close() {
       modal.classList.remove("is-open");
       modal.setAttribute("hidden", "");
@@ -319,6 +413,13 @@
         else if (submitBtn && submitBtn.parentNode) submitBtn.parentNode.insertBefore(rij, submitBtn);
         else form.appendChild(rij);
         akkoordVak = vak;
+        // DE STAND ER NOG EEN KEER OVER.
+        //
+        // Deze functie is async: de rij komt pas binnen nadat /api/tenant heeft geantwoord,
+        // en dat kan ná het openen van het venster zijn. Zonder deze regel verscheen in de
+        // poortstand alsnog een toestemmingsvinkje, een halve seconde later, bij een vraag
+        // die daar niet gesteld wordt.
+        if (modal.classList.contains("is-open")) zetStand(huidigeBron);
       } catch (_) {
         // Geen vinkje: de lead gaat dan alleen als mail, zoals voorheen.
       }
@@ -347,6 +448,15 @@
         // meldt de lead zonder dit niet bij de centrale database.
         akkoord: akkoordVak ? akkoordVak.checked === true : false,
       };
+
+      // DE POORT MELDT ZICHZELF.
+      //
+      // De runtime leest `context.productType` en mailt de poortaanvraag daarom niet. Dat
+      // staat hier en niet bij de pagina: de bron van het venster weet wat dit is, en een
+      // pagina die het vergeet zou de partner een mail bezorgen bij elke bezoeker.
+      if (huidigeBron === POORT_BRON) {
+        data.context = Object.assign({}, data.context || {}, { productType: POORT_BRON });
+      }
 
       // Quick client-side checks. Server validates again.
       const missing = [];
@@ -384,7 +494,9 @@
           const detail = json?.error || ("HTTP " + res.status);
           throw new Error(detail);
         }
-        // Success.
+        // Success. De gegevens blijven in dit tabblad staan, zodat de toestemmingsvraag bij
+        // het rapport ze niet opnieuw hoeft te stellen. Zie de kop van dit bestand.
+        bewaarGegevens(data);
         form.reset();
         if (counter) counter.textContent = "0/" + MAX_MESSAGE;
         // Hide everything except the success box so the user gets a clean
