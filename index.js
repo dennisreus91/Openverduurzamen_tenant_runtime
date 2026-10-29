@@ -1696,6 +1696,50 @@ export function createTenantApp(config) {
   // -------------------------------------------------------------------------
   // Pages — read from this tenant's public/templates/ folder.
   // -------------------------------------------------------------------------
+  // ── De cachemarkering komt uit het bestand ──────────────────────────────
+  //
+  // In de sjablonen staat ?v=20261029b achter /assets/mid_app.js en vrienden. Die
+  // markering moest met de hand mee veranderen, en dat ging twee keer op een dag mis: het
+  // bestand was nieuw, de markering niet, en een bezoeker die hier eerder was hield de
+  // oude versie uit zijn cache. Op 29 oktober 2026 betekende dat de gegevenspoort voor
+  // terugkerende bezoekers niet bestond, op een tenant die net publiek was gegaan -- en
+  // van buiten was er niets aan te zien.
+  //
+  // Een markering die je met de hand bijhoudt is geen bewaking maar een herinnering, en
+  // herinneringen falen precies op drukke dagen. Nu wordt hij uit de INHOUD van het
+  // bestand afgeleid: verandert het bestand, dan verandert de url, en kan de cache niet
+  // meer achterlopen. De waarde in het sjabloon doet er niet meer toe; hij blijft staan
+  // als terugval voor een bestand dat niet gevonden wordt.
+  //
+  // Per boot berekend en onthouden: de bestanden veranderen niet tijdens het draaien, en
+  // bij elke pagina opnieuw hashen zou werk zijn zonder opbrengst.
+  const assetMarkeringen = new Map();
+
+  function assetMarkering(bestandsnaam) {
+    if (assetMarkeringen.has(bestandsnaam)) return assetMarkeringen.get(bestandsnaam);
+    const abs =
+      safeAssetPath(assetsDir, bestandsnaam) || safeAssetPath(gedeeldeAssetsDir, bestandsnaam);
+    let markering = null;
+    if (abs) {
+      try {
+        markering = crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex").slice(0, 10);
+      } catch {
+        markering = null;
+      }
+    }
+    assetMarkeringen.set(bestandsnaam, markering);
+    return markering;
+  }
+
+  const ASSET_MARKERING_RE = /(\/assets\/([A-Za-z0-9_.\/-]+?)\?v=)([A-Za-z0-9._-]+)/g;
+
+  function metVerseMarkeringen(html) {
+    return String(html).replace(ASSET_MARKERING_RE, (heel, kop, naam, oud) => {
+      const nieuw = assetMarkering(naam);
+      return nieuw ? kop + nieuw : heel;
+    });
+  }
+
   function serveTemplatedPage(req, res, key, fallback) {
     const tpl = templates[key];
     if (!tpl) return res.status(404).type("text/plain").send(fallback);
@@ -1709,7 +1753,7 @@ export function createTenantApp(config) {
       labelPdfUpload: labelPdfAan(),
       epaUpload: epaUploadAan(),
     }));
-    res.type("text/html; charset=utf-8").send(html);
+    res.type("text/html; charset=utf-8").send(metVerseMarkeringen(html));
   }
 
   // -------------------------------------------------------------------------
