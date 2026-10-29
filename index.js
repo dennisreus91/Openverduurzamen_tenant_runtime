@@ -563,6 +563,42 @@ export function createTenantApp(config) {
     return out;
   }
 
+  // ── De poortcookie ──────────────────────────────────────────────────────
+  //
+  // Bewijs dat deze browser de gegevenspoort is gelopen. Nodig omdat het volledige
+  // rapport daarna zonder adviseurslogin aangevraagd mag worden: zonder bewijs aan de
+  // SERVERkant is "ik heb mijn gegevens gegeven" een bewering van de pagina, en dan is de
+  // route een gratis rapportautomaat voor iedereen die hem vindt.
+  //
+  // DRIE GRENZEN ZITTEN IN HET ONTWERP
+  // 1. Het e-mailadres komt UIT de cookie, niet uit het verzoek. Anders kan iemand een
+  //    rapport naar een willekeurig adres laten mailen op onze rekening.
+  // 2. De route staat in DURE_ROUTES, dus de rem per IP geldt, en het dagplafond erboven.
+  // 3. Twaalf uur geldig. Lang genoeg voor een bezoek, kort genoeg om niet een week lang
+  //    een sleutel in iemands browser te laten staan.
+  //
+  // SameSite=None, en dat is hier geen slordigheid: de tool staat in een iframe op de site
+  // van de partner, en met Lax stuurt de browser de cookie bij zo'n verzoek niet mee --
+  // dan werkt de aanvraag alleen op onze eigen hostnaam. Wat een vervalst verzoek zou
+  // kunnen bereiken is een rapport naar het adres van de bezoeker zelf; dat kost ons geld
+  // en daar staan grens 2 en 3 voor, maar het lekt niets.
+  const POORT_COOKIE = "wwwpoort";
+  const POORT_COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
+
+  function zetPoortCookie(res, { email, naam }) {
+    const waarde = signInternalCookie({ email, naam: naam || "", exp: Date.now() + POORT_COOKIE_TTL_MS });
+    res.setHeader("Set-Cookie",
+      `${POORT_COOKIE}=${encodeURIComponent(waarde)}; ` +
+      `Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${Math.floor(POORT_COOKIE_TTL_MS / 1000)}`
+    );
+  }
+
+  function leesPoort(req) {
+    const cookies = parseCookies(req.headers.cookie || "");
+    const payload = verifyInternalCookie(cookies[POORT_COOKIE]);
+    return payload && validateEmail(payload.email) ? payload : null;
+  }
+
   function readInternalSession(req) {
     const cookies = parseCookies(req.headers.cookie || "");
     const payload = verifyInternalCookie(cookies[INTERNAL_COOKIE_NAME]);
@@ -1776,6 +1812,10 @@ export function createTenantApp(config) {
   // woningen doorrekent hoort geen rem tegen te komen; het gaat om de
   // aanroeper zonder formulier en zonder account.
   const DURE_ROUTES = [
+    // De publieke aanvraag van het volledige rapport. Die kost het meest van alles op
+    // deze lijst -- data plus taalmodel -- en is sinds 29 oktober 2026 zonder login te
+    // bereiken.
+    "/api/full/aanvraag",
     "/api/mid/lookup",
     "/api/full/lookup-address",
     "/api/mid/stream",
@@ -1864,7 +1904,28 @@ export function createTenantApp(config) {
    * Wouter testen met hun gastlogin en horen geen leadformulier voor zichzelf te zien.
    */
   function gegevensPoortAan() {
-    return Boolean(config.features?.gegevensPoort);
+    return poortPlaats() !== false;
+  }
+
+  /**
+   * WAAR de poort staat, niet alleen OF hij er is.
+   *
+   * - "vooraf"       voor de eerste aanroep die geld kost (het adres opzoeken). Zo staat
+   *                  er een naam bij voordat de rekening loopt.
+   * - "bij_download" pas bij de download van het snelle rapport of de aanvraag van het
+   *                  volledige. Lagere drempel, maar het opzoeken is dan al betaald.
+   *
+   * Dennis verwacht naar "bij_download" te gaan zodra het snelle rapport goedkoper kan
+   * (29 oktober 2026). Daarom is dit een instelling en geen tak in de code: de
+   * omschakeling is dan één regel in de tenantconfiguratie.
+   *
+   * `true` blijft "vooraf" lezen, zodat een config die dat al zet niet verandert.
+   */
+  function poortPlaats() {
+    const waarde = config.features?.gegevensPoort;
+    if (waarde === true) return "vooraf";
+    if (waarde === "vooraf" || waarde === "bij_download") return waarde;
+    return false;
   }
 
   /** Waar een ingelogde adviseur hoort uit te komen. */
@@ -2037,6 +2098,93 @@ export function createTenantApp(config) {
     }
   });
 
+  // Dezelfde body als /api/internal/full/render; alleen de toegang is anders.
+  app.use("/api/full/aanvraag", express.json({ limit: "20mb" }));
+
+  /**
+   * Het volledige rapport aanvragen zonder adviseurslogin.
+   *
+   * WAAROM DEZE ROUTE BESTAAT
+   * De gratis renderroute zat achter de adviseurslogin, en daardoor kon een bezoeker op de
+   * site van de partner het volledige rapport niet krijgen: de knop werd een
+   * contactverzoek. Met de gegevenspoort ervoor is dat niet meer nodig -- we weten wie hij
+   * is voordat er een euro aan data loopt. Besluit Dennis, 29 oktober 2026.
+   *
+   * WIE ER LANGS MAG
+   * De poortcookie, of een adviseurssessie. Die tweede staat erbij zodat Maurice en Wouter
+   * dezelfde knop gebruiken als een bezoeker en dus hetzelfde testen; hun eigen dagmax
+   * geldt dan nog steeds.
+   *
+   * HET E-MAILADRES KOMT UIT DE COOKIE. Niet uit de body: anders laat iemand een rapport
+   * naar een willekeurig adres mailen op onze rekening.
+   *
+   * GEEN TWEEDE ALTUM-AANROEP. Deze route stuurt adres en `confirmed_data` door, net als de
+   * interne; de report-api haalt de bronnen op uit zijn eigen cache (lib/bron_cache.js,
+   * standaard een halfuur). De bezoeker vraagt het volledige rapport minuten na het
+   * snelle, dus dat valt binnen die termijn. Wie dat zeker wil stellen zet
+   * BRON_CACHE_TTL_MS hoger bij de report-api.
+   *
+   * WAT DE BEZOEKER ZELF CORRIGEERDE gaat mee: `confirmed_data` is precies de invoer
+   * waarmee het snelle rapport is gemaakt, dus beide rapporten rekenen met hetzelfde.
+   */
+  app.post("/api/full/aanvraag", async (req, res) => {
+    try {
+      const sessie = readInternalSession(req);
+      const poort = sessie ? null : leesPoort(req);
+      if (!sessie && !poort) {
+        return res.status(401).json({
+          error: "Vul eerst uw gegevens in voordat u het rapport aanvraagt.",
+          code: "poort_vereist",
+        });
+      }
+      // Bij een adviseur blijft het adres uit de body komen: hij vraagt aan voor een
+      // bewoner en vult diens e-mailadres in. Bij een bezoeker is het zijn eigen adres,
+      // en dat staat in de cookie.
+      const email = poort ? poort.email : String(req.body?.email || "").trim();
+      const address = normalizeAddressInput(req.body?.address || req.body || {});
+      const confirmedData = normalizeConfirmedDataInput(req.body?.confirmed_data || {});
+      const errors = {};
+      if (!validateEmail(email)) errors.email = "Geldig e-mailadres is verplicht.";
+      if (!address.postalcode) errors.postalcode = "Postcode is verplicht.";
+      if (!address.housenumber) errors.housenumber = "Huisnummer is verplicht.";
+      Object.assign(errors, validateConfirmedDataBasic(confirmedData));
+      if (Object.keys(errors).length) return res.status(400).json({ error: "Ongeldige invoer.", field_errors: errors });
+
+      const plafond = dagplafond();
+      if (plafond > 0 && getDagGebruik(dataDir) >= plafond) {
+        return res.status(429).json({
+          error: `Er zijn vandaag al ${plafond} rapporten aangevraagd. Probeer het morgen opnieuw.`,
+          code: "dagplafond_bereikt",
+          dagplafond: plafond,
+        });
+      }
+      const account = sessie?.account || null;
+      if (account?.soort === "gast" && account.dagmax >= 0) {
+        if (getDagGebruikVoorAccount(dataDir, account.email) >= account.dagmax) {
+          return res.status(429).json({
+            error: account.dagmax === 0
+              ? "Dit account kan geen volledige rapporten aanvragen."
+              : `Dit account heeft vandaag al ${account.dagmax} volledige rapporten aangevraagd. Morgen kan het weer.`,
+            code: "accountlimiet_bereikt",
+            dagmax: account.dagmax,
+          });
+        }
+      }
+
+      const payload = await createInternalOrder({
+        req, email, address, confirmedData, epaModel: null,
+        sourceMeta: {
+          tenant_id: config.id,
+          request_id: String(req.body?.request_id || "").trim(),
+          invoer: poort ? "publiek_na_poort" : String(req.body?.source || "").trim(),
+        },
+      });
+      return res.json(payload);
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
   // GET /api/internal/quota — returns the current month's usage. Two
   // ways to authenticate: either the same cookie used by the staff
   // intake page (so the staff can refresh-and-see), or a token query
@@ -2137,7 +2285,7 @@ export function createTenantApp(config) {
       // Staat de gegevenspoort aan? Van buiten af te lezen, om dezelfde reden als
       // `een_tool`: een vlag die alleen in een andere repo staat en alleen te merken is
       // door de flow te doorlopen, blijft bij een verkeerde stand te lang onzichtbaar.
-      gegevens_poort: gegevensPoortAan(),
+      gegevens_poort: poortPlaats(),
       // Het plafond op het aantal volledige rapporten per dag, of null als er geen is.
       // Zonder plafond kan een doorgeslagen aanroep een rekening maken zonder dat er
       // iets aan te zien is; dat hoort van buiten af te lezen te zijn.
@@ -2195,7 +2343,8 @@ export function createTenantApp(config) {
     // deze tenant, en is de bezoeker geen ingelogde adviseur. Die tweede voorwaarde hoort
     // hier en niet in de pagina: het antwoord hangt aan een HttpOnly-cookie, die de pagina
     // zelf niet kan lezen.
-    gegevensPoort: gegevensPoortAan() && !readInternalSession(req),
+    // De plaats van de poort, of false. Een ingelogde adviseur ziet hem nooit.
+    gegevensPoort: gegevensPoortAan() && !readInternalSession(req) ? poortPlaats() : false,
     brand: config.brand,
     contact: config.contact,
     // Het contactvenster leest de toestemmingstekst hier op, zodat hij niet in vier
@@ -3534,6 +3683,14 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         })
         .catch(() => {});
 
+      // Het bewijs voor de serverkant dat deze browser contactgegevens heeft gegeven. Zie
+      // zetPoortCookie(): hierop rust de publieke aanvraag van het volledige rapport.
+      //
+      // BIJ ELKE LEAD, niet alleen bij de poortaanvraag. Staat de poort op
+      // "bij_download", dan komt de bezoeker hier met een gewoon leadformulier -- gegevens
+      // en toestemming in één keer -- en hoort hij daarna net zo goed zijn rapport te
+      // krijgen. De cookie zegt niets meer dan: deze browser gaf dit e-mailadres.
+      zetPoortCookie(res, { email, naam: [firstName, lastName].filter(Boolean).join(" ") });
       return res.json({ ok: true });
     } catch (e) {
       // eslint-disable-next-line no-console

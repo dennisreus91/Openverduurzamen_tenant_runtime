@@ -16,8 +16,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import http from "node:http";
-import { createTenantApp } from "../index.js";
+import os from "node:os";
+import path from "node:path";
+
+process.env.ORDERS_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "tenant-poort-"));
+const { createTenantApp } = await import("../index.js");
 
 const INLOG = {
   WWW_INTERNAL_EMAIL: "adviseur@example.nl",
@@ -82,17 +87,36 @@ async function tenant(t, features) {
 
 // ── De vlag ───────────────────────────────────────────────────────────────────
 
-test("/health noemt of de gegevenspoort aanstaat", async (t) => {
-  const uit = await tenant(t, { gegevensPoort: true });
-  assert.equal((await (await uit.haal("/health")).json()).gegevens_poort, true);
+test("/health noemt WAAR de poort staat, niet alleen of hij er is", async (t) => {
+  const vooraf = await tenant(t, { gegevensPoort: "vooraf" });
+  assert.equal((await (await vooraf.haal("/health")).json()).gegevens_poort, "vooraf");
+
+  const later = await tenant(t, { gegevensPoort: "bij_download" });
+  assert.equal((await (await later.haal("/health")).json()).gegevens_poort, "bij_download");
 
   const zonder = await tenant(t);
   assert.equal((await (await zonder.haal("/health")).json()).gegevens_poort, false);
 });
 
-test("/api/tenant zegt de pagina of de poort getoond moet worden", async (t) => {
+test("true blijft vooraf lezen", () => {
+  // Een config die `true` zet verandert niet van gedrag doordat de vlag een plaats werd.
+  // Dit is de stand waarmee de WoonWijzerWinkel live ging.
+});
+
+test("true wordt gelezen als vooraf", async (t) => {
   const uit = await tenant(t, { gegevensPoort: true });
-  assert.equal((await (await uit.haal("/api/tenant")).json()).gegevensPoort, true);
+  assert.equal((await (await uit.haal("/health")).json()).gegevens_poort, "vooraf");
+  assert.equal((await (await uit.haal("/api/tenant")).json()).gegevensPoort, "vooraf");
+});
+
+test("een onbekende waarde zet de poort uit in plaats van hem te raden", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "misschien" });
+  assert.equal((await (await uit.haal("/health")).json()).gegevens_poort, false);
+});
+
+test("/api/tenant zegt de pagina waar de poort staat", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "bij_download" });
+  assert.equal((await (await uit.haal("/api/tenant")).json()).gegevensPoort, "bij_download");
 });
 
 test("een ingelogde adviseur ziet de poort niet", async (t) => {
@@ -145,4 +169,95 @@ test("de poort eist dezelfde velden als het contactformulier", async (t) => {
   });
   assert.equal(r.status, 400);
   assert.match((await r.json()).error, /telefoonnummer/i);
+});
+
+
+// ── Het volledige rapport zonder adviseurslogin ───────────────────────────────
+//
+// WAAROM DEZE ROUTE BEWIJS EIST
+// Zonder bewijs aan de serverkant is "ik heb mijn gegevens gegeven" een bewering van de
+// pagina, en is dit een gratis rapportautomaat voor wie hem vindt. Elk rapport kost ons
+// data plus taalmodel. Het bewijs is de poortcookie, die /api/lead zet.
+
+/** Loopt de poort en geeft de cookie terug. */
+async function poortLopen(uit) {
+  const r = await uit.post("/api/lead", {
+    ...AANVRAAG,
+    akkoord: false,
+    context: { productType: "rapport_toegang" },
+  });
+  assert.equal(r.status, 200);
+  const cookie = (r.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).join("; ");
+  assert.match(cookie, /wwwpoort=/, "de poort hoort een cookie te zetten");
+  return cookie;
+}
+
+// De woning zoals de bezoeker haar in het snelle rapport heeft bevestigd of gecorrigeerd.
+// Die invoer MOET mee: beide rapporten horen met dezelfde gegevens te rekenen, en de route
+// weigert een aanvraag zonder (zie validateConfirmedDataBasic).
+const WONING = {
+  address: { postalcode: "2625ZD", housenumber: "9" },
+  confirmed_data: {
+    soort_woning: "tussenwoning",
+    build_year: 1985,
+    floor_area_m2: 120,
+    energy_label: "D",
+  },
+};
+
+test("zonder poort geen rapport", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const r = await uit.post("/api/full/aanvraag", { email: "jan@voorbeeld.nl", ...WONING });
+  assert.equal(r.status, 401);
+  assert.equal((await r.json()).code, "poort_vereist");
+});
+
+test("een verzonnen cookie opent niets", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const r = await uit.post("/api/full/aanvraag", { email: "jan@voorbeeld.nl", ...WONING },
+    { cookie: "wwwpoort=zelfgemaakt.ondertekening" });
+  assert.equal(r.status, 401);
+});
+
+test("de aanvraag zonder bevestigde woninggegevens wordt geweigerd", async (t) => {
+  // Zonder deze grens zou het volledige rapport op andere gegevens rekenen dan het snelle
+  // rapport dat de bezoeker op het scherm zag.
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const cookie = await poortLopen(uit);
+  const r = await uit.post("/api/full/aanvraag", { address: WONING.address, confirmed_data: {} }, { cookie });
+  assert.equal(r.status, 400);
+  assert.ok((await r.json()).field_errors?.energy_label);
+});
+
+test("na de poort mag het rapport aangevraagd worden, zonder adviseurslogin", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const cookie = await poortLopen(uit);
+  const r = await uit.post("/api/full/aanvraag", WONING, { cookie });
+  assert.equal(r.status, 200, JSON.stringify(await r.json()));
+});
+
+test("het e-mailadres komt uit de cookie, niet uit het verzoek", async (t) => {
+  // Anders laat iemand met een geldige poortcookie een rapport naar een willekeurig adres
+  // mailen, op onze rekening.
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const cookie = await poortLopen(uit);
+  const r = await uit.post("/api/full/aanvraag", { email: "iemand.anders@voorbeeld.nl", ...WONING }, { cookie });
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  const order = JSON.parse(JSON.stringify(d));
+  assert.ok(!JSON.stringify(order).includes("iemand.anders@voorbeeld.nl"),
+    "het opgegeven adres hoort genegeerd te worden: " + JSON.stringify(order));
+});
+
+test("ook een gewoon leadformulier opent de route", async (t) => {
+  // Dat is de stand "bij_download": gegevens en toestemming in één formulier, en daarna
+  // hoort de bezoeker net zo goed zijn rapport te krijgen.
+  const uit = await tenant(t, { gegevensPoort: "bij_download" });
+  const r = await uit.post("/api/lead", { ...AANVRAAG, akkoord: true, sourcePage: "contact" });
+  // Zonder RESEND_API_KEY strandt het mailen van die lead -- maar de cookie hoort er dan
+  // niet te zijn, want er is niets vastgelegd. Deze test legt vast dat we die twee niet
+  // door elkaar halen.
+  assert.equal(r.status, 500);
+  const cookie = (r.headers.getSetCookie?.() || []).join("; ");
+  assert.equal(cookie, "", "een mislukte lead hoort geen poortcookie te zetten");
 });

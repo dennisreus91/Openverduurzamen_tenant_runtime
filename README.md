@@ -82,6 +82,40 @@ See `tenant-woonwijzerwinkel/tenant.config.js` for a fully-populated example.
 - `ADMIN_API_KEY`
 - `ORDERS_DATA_DIR=/var/data` (mount Render disk here)
 
+### De gegevenspoort (publieke tenant, optioneel)
+
+`features.gegevensPoort` in de tenantconfiguratie:
+
+| waarde | wat er gebeurt |
+|---|---|
+| `false` (standaard) | geen poort |
+| `"vooraf"` (of `true`) | naam, e-mail en telefoonnummer vóór het adres opzoeken |
+| `"bij_download"` | pas bij de download van het snelle rapport of de aanvraag van het volledige |
+
+Waarom het een plaats is en geen ja/nee: `"vooraf"` beschermt de Altum-aanroep van circa
+een euro per adres, `"bij_download"` heeft een lagere drempel. Dat is een afweging die met
+de prijs van het snelle rapport meebeweegt, en dan hoort het een regel config te zijn.
+
+Een ingelogde adviseur ziet de poort nooit — `/api/tenant` geeft dan `false`. `/health`
+noemt de plaats, zodat je van buiten kunt nakijken wat er aanstaat.
+
+De poort is **geen toestemming**. Hij vraagt gegevens om de dienst te kunnen leveren; de
+toestemming om die gegevens met de partner te delen is een eigen, expliciete vraag bij elke
+rapportaanvraag, en blijft een vrije keuze — wie niet aanvinkt krijgt zijn rapport net zo
+goed. Zie `assets/contact_modal.js` voor de twee standen van het venster.
+
+**`POST /api/full/aanvraag`** — het volledige rapport aanvragen zónder adviseurslogin.
+Zelfde body als `/api/internal/full/render` (`address`, `confirmed_data`, `request_id`).
+Toegang via de poortcookie (`wwwpoort`, 12 uur, HttpOnly, SameSite=None zodat hij ook in
+een iframe op de site van de partner meekomt) of een adviseurssessie. Het e-mailadres komt
+**uit de cookie**, niet uit de body: anders laat iemand een rapport naar een willekeurig
+adres mailen op onze rekening. Het dagplafond geldt, en de route staat in `DURE_ROUTES`
+(`TENANT_DURE_AANROEPEN_PER_UUR`, standaard 20 per uur per IP).
+
+Geen tweede bronaanroep: de report-api haalt zijn bronnen uit `lib/bron_cache.js`
+(standaard een halfuur), en de bezoeker vraagt het volledige rapport minuten na het
+snelle. Zet `BRON_CACHE_TTL_MS` daar hoger als een latere aanvraag ook gratis moet zijn.
+
 ### Mails aan een partner die zijn CRM eruit vult (optioneel)
 
 - `BESTEL_MELDING_EMAIL` — komma-gescheiden. Staat die er, dan gaat bij elke opgeleverde
