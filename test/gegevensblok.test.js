@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EINDE, START, VELDEN, gegevensblok } from "../lib/gegevensblok.js";
-import { bouwBestelMelding, bouwLeadMail } from "../lib/mail_client.js";
+import { bestelmeldingMag, bouwBestelMelding, bouwLeadMail, sendBestelMelding } from "../lib/mail_client.js";
 
 const LEAD = {
   firstName: "Jan",
@@ -193,4 +193,44 @@ test("een bedrag van nul wordt niet weggelaten maar als nul getoond", () => {
   const m = metOmgeving({ BESTEL_MELDING_EMAIL: "crm@woonwijzerwinkel.nl" }, () =>
     bouwBestelMelding({ order: { ...ORDER, amount_eur: 0 }, config: LEAD.config }));
   assert.match(m.html, /EUR 0,00/);
+});
+
+
+// ── Wanneer de bestelmelding wél en niet mag ──────────────────────────────────
+//
+// Op een tenant waar het volledige rapport GRATIS is, is een "bestelling" niets anders dan
+// een rapportaanvraag. Een melding zou dan naam, e-mailadres en adres sturen van iemand
+// die net in beeld las: "Zonder vinkje krijgt u het rapport net zo goed en gaan uw
+// gegevens niet naar hen toe." De leadmail komt die belofte na sinds 29 oktober 2026;
+// zonder deze grens zou de bestelmelding hem via een andere deur breken.
+
+test("een betaalde bestelling mag gemeld worden", () => {
+  // Dan is het een zakelijke registratie van een transactie, en die hoort bij de partner
+  // die hem factureert.
+  assert.equal(bestelmeldingMag({ amount_eur: 30, payment: { status: "paid" } }), true);
+});
+
+test("een gratis rapport zonder vinkje mag niet", () => {
+  assert.equal(bestelmeldingMag({ amount_eur: 0, source_meta: { toestemming: false } }), false);
+  assert.equal(bestelmeldingMag({ amount_eur: 0 }), false, "ontbrekend is geen ja");
+});
+
+test("een gratis rapport mét vinkje mag wel", () => {
+  assert.equal(bestelmeldingMag({ amount_eur: 0, source_meta: { toestemming: true } }), true);
+});
+
+test("op rekening bij een partner telt niet als betaald", () => {
+  // Daar rekent de adviseur niet bij ons af; de partner factureert hem. Zonder deze
+  // uitzondering zou het bedrag alleen al de melding rechtvaardigen.
+  assert.equal(
+    bestelmeldingMag({ amount_eur: 30, payment: { status: "op_rekening" }, source_meta: { toestemming: false } }),
+    false
+  );
+});
+
+test("sendBestelMelding verstuurt niets zonder grond", async () => {
+  const uit = await metOmgeving({ BESTEL_MELDING_EMAIL: "crm@woonwijzerwinkel.nl", RESEND_API_KEY: "test" }, () =>
+    sendBestelMelding({ order: { ...ORDER, amount_eur: 0 }, config: LEAD.config }));
+  assert.equal(uit.sent, false);
+  assert.equal(uit.reason, "geen_toestemming_en_niet_betaald");
 });

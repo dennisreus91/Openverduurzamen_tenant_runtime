@@ -1116,6 +1116,12 @@ export function createTenantApp(config) {
    * existing processOrderById flow immediately runs render → PDF →
    * mail. Used by /api/internal/full/render for WoonWijzerWinkel staff.
    */
+  /**
+   * `sourceMeta.toestemming` bepaalt of deze bestelling bij de partner gemeld mag worden
+   * (zie bestelmeldingMag in lib/mail_client.js). Bij een gratis rapport is een bestelling
+   * niets anders dan een aanvraag, en dan is het vinkje het enige dat die melding
+   * rechtvaardigt.
+   */
   async function createInternalOrder({ req, email, address, confirmedData, epaModel = null, sourceMeta = null, opnameCorrecties = null }) {
     const baseUrl = getBaseUrl(req);
     const orderId = newOrderId();
@@ -2169,6 +2175,7 @@ export function createTenantApp(config) {
           tenant_id: config.id,
           request_id: String(req.body?.request_id || "").trim(),
           invoer: String(req.body?.source || "").trim(),
+          toestemming: req.body?.akkoord === true,
         },
       });
       return res.json(payload);
@@ -2256,6 +2263,7 @@ export function createTenantApp(config) {
           tenant_id: config.id,
           request_id: String(req.body?.request_id || "").trim(),
           invoer: poort ? "publiek_na_poort" : String(req.body?.source || "").trim(),
+          toestemming: req.body?.akkoord === true,
         },
       });
       return res.json(payload);
