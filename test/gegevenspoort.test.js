@@ -261,3 +261,43 @@ test("ook een gewoon leadformulier opent de route", async (t) => {
   const cookie = (r.headers.getSetCookie?.() || []).join("; ");
   assert.equal(cookie, "", "een mislukte lead hoort geen poortcookie te zetten");
 });
+
+
+// ── Geen toestemming, geen mail naar de partner ───────────────────────────────
+//
+// Het venster zegt bij de download met zoveel woorden: "Zonder vinkje krijgt u het rapport
+// net zo goed en gaan uw gegevens niet naar hen toe." Tot 29 oktober 2026 was dat niet
+// waar -- de mail ging naar LEAD_EMAIL ongeacht het vinkje, en bij deze tenant IS
+// LEAD_EMAIL de partner. Deze tests houden die belofte vast.
+
+test("zonder vinkje gaat er bij de download niets naar de partner", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const r = await uit.post("/api/lead", { ...AANVRAAG, sourcePage: "snel_rapport_download", akkoord: false });
+  assert.equal(r.status, 200, "de bezoeker hoort gewoon verder te kunnen");
+  assert.doesNotMatch(uit.logregels.join("\n"), /RESEND_API_KEY/, "er is een mail geprobeerd");
+});
+
+test("mét vinkje gaat hij er wel heen", async (t) => {
+  // De keerzijde. Zonder deze test zou "niet mailen" ook kloppen als er nooit meer iets
+  // uitging, en dan krijgt de partner geen enkele lead meer.
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const r = await uit.post("/api/lead", { ...AANVRAAG, sourcePage: "snel_rapport_download", akkoord: true });
+  assert.equal(r.status, 500, "zonder RESEND_API_KEY strandt het versturen");
+  assert.match(uit.logregels.join("\n"), /RESEND_API_KEY/);
+});
+
+test("de aanvraag van het volledige rapport volgt dezelfde regel", async (t) => {
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const r = await uit.post("/api/lead", { ...AANVRAAG, sourcePage: "mid_report_full_cta", akkoord: false });
+  assert.equal(r.status, 200);
+  assert.doesNotMatch(uit.logregels.join("\n"), /RESEND_API_KEY/);
+});
+
+test("het gewone contactformulier mailt wel, ook zonder vinkje", async (t) => {
+  // Dat IS een verzoek om contact. Daar is de mail het hele punt, en een vinkje over
+  // doorgifte verandert daar niets aan.
+  const uit = await tenant(t, { gegevensPoort: "vooraf" });
+  const r = await uit.post("/api/lead", { ...AANVRAAG, sourcePage: "contact", akkoord: false });
+  assert.equal(r.status, 500);
+  assert.match(uit.logregels.join("\n"), /RESEND_API_KEY/);
+});

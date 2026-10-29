@@ -3670,7 +3670,32 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
       // rapportaanvraag, dan is dat een eigen verzoek aan deze route en gaat er dan wel
       // een mail uit, met het rapport erbij.
       const isPoort = ctxIn.productType === "rapport_toegang";
-      if (!isPoort) await sendLeadEmail({
+
+      // GEEN TOESTEMMING, GEEN MAIL NAAR DE PARTNER.
+      //
+      // Bij de download van het snelle rapport en bij de aanvraag van het volledige stelt
+      // het venster een expliciete vraag: mag de partner uw gegevens krijgen en contact
+      // opnemen? Het vinkje is vrij -- wie nee zegt krijgt zijn rapport net zo goed.
+      //
+      // Tot 29 oktober 2026 ging de mail naar LEAD_EMAIL ongeacht dat vinkje. Alleen de
+      // melding aan de centrale database hing eraan. Bij deze tenant ÍS LEAD_EMAIL de
+      // partner, dus wie nee aanvinkte zag zijn gegevens alsnog die kant op gaan -- terwijl
+      // het venster er met zoveel woorden bij zei dat dat niet zou gebeuren.
+      //
+      // Het gewone contactformulier valt hier buiten: dat IS een verzoek om contact, en
+      // daar is de mail het hele punt.
+      const TOESTEMMINGSBRONNEN = new Set([
+        "snel_rapport_download",
+        "mid_report_full_cta",
+        "volledig_rapport",
+        "advies_partner",
+      ]);
+      const vraagtToestemming = TOESTEMMINGSBRONNEN.has(sourcePage) || ctxIn.productType === "advies_aanvraag";
+      const magMailen = !isPoort && (!vraagtToestemming || body.akkoord === true);
+      if (!magMailen && !isPoort) {
+        console.log(`[lead] niet gemaild: toestemming geweigerd (bron=${sourcePage || "-"})`);
+      }
+      if (magMailen) await sendLeadEmail({
         firstName,
         lastName,
         email,
