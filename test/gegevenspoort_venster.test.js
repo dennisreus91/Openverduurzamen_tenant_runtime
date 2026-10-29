@@ -38,6 +38,14 @@ class El {
     this.value = attrs.value || "";
     this.checked = false;
     this.textContent = "";
+    // De code zet de inleidende zin met innerHTML. Zonder deze koppeling landt die op een
+    // losse eigenschap en blijft textContent leeg -- dan meet de test niets en is hij groen
+    // om de verkeerde reden.
+    Object.defineProperty(this, "innerHTML", {
+      get: () => this.textContent,
+      set: (v) => { this.textContent = String(v).replace(/<[^>]*>/g, ""); },
+      configurable: true,
+    });
     this.classes = new Set(String(attrs.class || "").split(/\s+/).filter(Boolean));
     this.classList = {
       add: (c) => this.classes.add(c),
@@ -95,6 +103,8 @@ class El {
         const naam = k.trim();
         if (v === undefined) { if (naam in this.attrs) return true; }
         else if (this.attrs[naam] === v.replace(/^['"]|['"]$/g, "")) return true;
+      } else if (deel.startsWith("#")) {
+        if (this.attrs.id === deel.slice(1)) return true;
       } else if (deel.startsWith(".")) {
         if (this.classes.has(deel.slice(1))) return true;
       } else if (deel.toUpperCase() === this.tagName) return true;
@@ -116,8 +126,10 @@ function maakPagina() {
   const body = new El("body");
   const modal = new El("div", { "data-contact-modal": "" });
   body.append(modal);
+  modal.append(new El("h2", { id: "contactModalTitle" }));
   const form = new El("form", { "data-contact-form": "" });
   modal.append(form);
+  form.append(new El("p", { class: "contactModal__lead" }));
   form.append(new El("div", { class: "contactModal__sectionLabel" }));
   const grid = new El("div", { class: "contactModal__grid" });
   form.append(grid);
@@ -277,6 +289,31 @@ test("mét vinkje gaat de toestemming mee", async () => {
   v.modal.querySelector("[data-contact-akkoord]").checked = true;
   await v.verstuur();
   assert.equal(v.verzonden[1].akkoord, true);
+});
+
+// ── De teksten ────────────────────────────────────────────────────────────────
+
+test("de poort belooft geen contact, want dat is hier niet aan de orde", async () => {
+  // Zonder eigen teksten stond hier het gewone contactvenster: "Wilt u uw rapport
+  // bespreken met een adviseur? Laat uw gegevens achter, dan nemen wij contact met u op."
+  // De bezoeker heeft op dat moment nog geen rapport gezien, vraagt niet om contact, en
+  // wij beloven het hier juist NIET -- dat is de aparte vraag bij het rapport.
+  const v = await laadVenster();
+  v.open("rapport_toegang");
+  const kop = v.modal.querySelector("#contactModalTitle")?.textContent || "";
+  const lead = v.modal.querySelector(".contactModal__lead")?.textContent || "";
+  const knop = v.modal.querySelector("[data-contact-submit]")?.textContent || "";
+  assert.doesNotMatch(kop + " " + lead, /nemen wij zo spoedig mogelijk contact/);
+  assert.match(lead, /hier gebeurt dat nog niet/);
+  assert.equal(knop, "Doorgaan", "er wordt niets verstuurd naar iemand");
+});
+
+test("een gewoon contactverzoek houdt zijn eigen teksten", async () => {
+  const v = await laadVenster();
+  v.open("rapport_toegang");
+  v.open("");
+  const lead = v.modal.querySelector(".contactModal__lead")?.textContent || "";
+  assert.doesNotMatch(lead, /hier gebeurt dat nog niet/, "de poorttekst mag niet blijven hangen");
 });
 
 // ── De stand mag niet blijven hangen ──────────────────────────────────────────

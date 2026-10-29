@@ -279,6 +279,7 @@
       submit: submitBtn ? submitBtn.textContent : "",
     };
     let adviesModus = false;
+    let poortModus = false;
     let rapportModus = false;
     let huidigeBron = "";
     // Het volledige rapport aanvragen vanuit het snelle rapport, in hetzelfde
@@ -289,16 +290,31 @@
       huidigeBron = source || "";
       adviesModus = source === "advies_partner";
       rapportModus = source === "volledig_rapport";
+      // DE POORT HEEFT EIGEN TEKSTEN NODIG.
+      //
+      // Zonder deze stand kreeg de bezoeker hier het gewone contactvenster te zien: "Neem
+      // contact op -- Wilt u uw rapport bespreken met een adviseur? Laat uw gegevens
+      // achter, dan nemen wij contact met u op." Op dit moment klopt daar geen woord van.
+      // Hij heeft nog geen rapport gezien, hij vraagt niet om contact, en wij beloven hier
+      // juist NIET dat iemand hem belt -- dat is de aparte vraag bij het rapport. Live
+      // gezien op de publieke tenant, 29 oktober 2026.
+      poortModus = source === POORT_BRON;
       const partner = (tenantData && tenantData.adviesPartner) || "onze partner";
       if (titleEl) {
-        titleEl.textContent = adviesModus
-          ? "Vrijblijvend advies van " + partner
-          : rapportModus
-            ? "Volledig rapport aanvragen"
-            : origineel.title;
+        titleEl.textContent = poortModus
+          ? "Nog even uw gegevens"
+          : adviesModus
+            ? "Vrijblijvend advies van " + partner
+            : rapportModus
+              ? "Volledig rapport aanvragen"
+              : origineel.title;
       }
       if (leadEl) {
-        leadEl.innerHTML = adviesModus
+        leadEl.innerHTML = poortModus
+          // Zegt wat er gebeurt en wat er NIET gebeurt. Dat tweede is hier het punt: wie
+          // hier zijn nummer achterlaat moet weten dat er niet meteen iemand gaat bellen.
+          ? "Vul uw gegevens in, dan rekenen we de woning door. U krijgt het inzicht direct op het scherm. Of " + partner + " contact met u opneemt om het door te nemen, vraagt u zelf bij het rapport — hier gebeurt dat nog niet."
+          : adviesModus
           ? "Gratis extra dienst: de specialisten van " + partner + " zetten dit rapport om in concrete maatregelen en nemen de uitvoering volledig uit handen. Laat uw gegevens achter; zij ontvangen het snelle rapport en nemen contact met u op. De financiering regelt u met uw hypotheekadviseur."
           : rapportModus
             // GEEN PARTNERNAAM IN DEZE ZIN (Dennis, 23 oktober 2026).
@@ -311,14 +327,19 @@
             : origineel.lead;
       }
       if (successBox) {
-        successBox.textContent = adviesModus
+        successBox.textContent = poortModus
+          ? "Dank u wel. We halen nu de woninggegevens op."
+          : adviesModus
           ? "Bedankt! Uw aanvraag en het rapport zijn verstuurd naar " + partner + ". Zij nemen zo spoedig mogelijk contact met u op."
           : rapportModus
             ? "Bedankt! Het volledige rapport wordt gemaakt en komt binnen enkele minuten per e-mail binnen."
             : origineel.success;
       }
       if (submitBtn) {
-        submitBtn.textContent = adviesModus
+        submitBtn.textContent = poortModus
+          // Niet "Versturen": er wordt hier niets naar iemand gestuurd.
+          ? "Doorgaan"
+          : adviesModus
           ? "Advies aanvragen"
           : rapportModus
             ? "Rapport aanvragen"
