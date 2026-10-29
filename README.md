@@ -82,6 +82,33 @@ See `tenant-woonwijzerwinkel/tenant.config.js` for a fully-populated example.
 - `ADMIN_API_KEY`
 - `ORDERS_DATA_DIR=/var/data` (mount Render disk here)
 
+### Twee scripts om te controleren wat er werkelijk draait
+
+```bash
+node scripts/lokale-keten.mjs ../tenant_woonwijzerwinkel
+bash scripts/controleer-live.sh woonwijzerwinkel.openverduurzamen.nl V3.37.0
+```
+
+**`lokale-keten.mjs`** zet de hele keten op je eigen machine: een nagebootste databron en
+een nagebootst taalmodel, met daarop de echte report-api en de echte tenant, en de runtime
+uit je werkmap in plaats van de gepinde kopie. Nul betaalde aanroepen, altijd dezelfde
+voorbeeldwoning, en bij Ctrl+C een telling van de bronaanroepen -- zo is "doet het
+volledige rapport de data opnieuw op" te tellen in plaats van te geloven.
+
+Dit script bestaat omdat op 29 oktober 2026 drie fouten achter elkaar aan het licht kwamen
+die geen testsuite kon zien: ze zaten geen van drieën in één onderdeel. Een merknaam die
+de tenant-assets terugschreven, een belofte in het contactvenster die niet bij het moment
+paste, en een cachemarkering die achterliep. Runtime, report-api en tenant deden alle drie
+niets verkeerd.
+
+**`controleer-live.sh`** is de tegenhanger na een uitrol: leest `/health`, vergelijkt de
+draaiende tag met wat je verwachtte, en controleert of de cachemarkering in de pagina nog
+bij het geserveerde bestand hoort. Afsluitcode 1 als er iets niet klopt, dus te hangen
+achter een release. Geen betaalde aanroep.
+
+Gebruik voor de lokale keten een venster **zonder** adviseurssessie: een ingelogde browser
+slaat de gegevenspoort over, en dan test je hem niet. Dat was een van de drie.
+
 ### De gegevenspoort (publieke tenant, optioneel)
 
 `features.gegevensPoort` in de tenantconfiguratie:
