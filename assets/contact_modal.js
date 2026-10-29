@@ -241,6 +241,10 @@
     // afvuren om een venster te openen is niet te lezen, en een lege
     // bronnaam zou stil de verkeerde teksten geven.
     window.openContactModal = function (source) { open(source || ""); };
+    // En weer dicht. De pagina heeft dit nodig als ze na een geslaagde verzending zelf
+    // verdergaat -- bij de gegevenspoort gaat de doorrekening meteen door, en dan blijft
+    // het bedankvenster over het rapport heen staan tot de bezoeker het wegklikt.
+    window.sluitContactModal = function () { close(); };
 
     closeButtons.forEach(function (b) { b.addEventListener("click", close); });
 
@@ -280,6 +284,7 @@
     };
     let adviesModus = false;
     let poortModus = false;
+    let downloadModus = false;
     let rapportModus = false;
     let huidigeBron = "";
     // Het volledige rapport aanvragen vanuit het snelle rapport, in hetzelfde
@@ -289,7 +294,15 @@
     function pasTekstenAan(source) {
       huidigeBron = source || "";
       adviesModus = source === "advies_partner";
-      rapportModus = source === "volledig_rapport";
+      // "mid_report_full_cta" is dezelfde aanvraag, maar vanaf de knop onder het snelle
+      // rapport op een publieke tenant. Zonder deze tweede bron kreeg die knop de
+      // teksten van het gewone contactvenster.
+      rapportModus = source === "volledig_rapport" || source === "mid_report_full_cta";
+      // De toestemmingsvraag bij de download van het snelle rapport. Daar werd eerder
+      // "Laat hieronder uw gegevens achter, dan nemen wij contact met u op" getoond: de
+      // bezoeker gaf die gegevens al bij de poort, er loopt een download, en of er
+      // contact komt is juist wat hier gevraagd wordt.
+      downloadModus = source === "snel_rapport_download";
       // DE POORT HEEFT EIGEN TEKSTEN NODIG.
       //
       // Zonder deze stand kreeg de bezoeker hier het gewone contactvenster te zien: "Neem
@@ -303,6 +316,8 @@
       if (titleEl) {
         titleEl.textContent = poortModus
           ? "Nog even uw gegevens"
+          : downloadModus
+            ? "Uw rapport staat klaar"
           : adviesModus
             ? "Vrijblijvend advies van " + partner
             : rapportModus
@@ -310,7 +325,9 @@
               : origineel.title;
       }
       if (leadEl) {
-        leadEl.innerHTML = poortModus
+        leadEl.innerHTML = downloadModus
+          ? "De download begint zo. Wilt u dat " + partner + " dit rapport met u doorneemt? Zet dan het vinkje hieronder. Zonder vinkje krijgt u het rapport net zo goed en gaan uw gegevens niet naar hen toe."
+          : poortModus
           // Zegt wat er gebeurt en wat er NIET gebeurt. Dat tweede is hier het punt: wie
           // hier zijn nummer achterlaat moet weten dat er niet meteen iemand gaat bellen.
           ? "Vul uw gegevens in, dan rekenen we de woning door. U krijgt het inzicht direct op het scherm. Of " + partner + " contact met u opneemt om het door te nemen, vraagt u zelf bij het rapport — hier gebeurt dat nog niet."
@@ -329,6 +346,8 @@
       if (successBox) {
         successBox.textContent = poortModus
           ? "Dank u wel. We halen nu de woninggegevens op."
+          : downloadModus
+            ? "Dank u wel. Uw rapport wordt nu gedownload."
           : adviesModus
           ? "Bedankt! Uw aanvraag en het rapport zijn verstuurd naar " + partner + ". Zij nemen zo spoedig mogelijk contact met u op."
           : rapportModus
@@ -339,6 +358,8 @@
         submitBtn.textContent = poortModus
           // Niet "Versturen": er wordt hier niets naar iemand gestuurd.
           ? "Doorgaan"
+          : downloadModus
+            ? "Downloaden"
           : adviesModus
           ? "Advies aanvragen"
           : rapportModus

@@ -316,6 +316,26 @@ test("een gewoon contactverzoek houdt zijn eigen teksten", async () => {
   assert.doesNotMatch(lead, /hier gebeurt dat nog niet/, "de poorttekst mag niet blijven hangen");
 });
 
+test("de toestemmingsvraag bij de download zegt wat er gebeurt", async () => {
+  // Hier stond "Laat hieronder uw gegevens achter, dan nemen wij contact met u op". De
+  // bezoeker gaf die gegevens al bij de poort, er loopt een download, en of er contact
+  // komt is juist wat hier gevraagd wordt -- niet iets dat we alvast beloven.
+  const v = await laadVenster();
+  v.open("snel_rapport_download");
+  const kop = v.modal.querySelector("#contactModalTitle")?.textContent || "";
+  const lead = v.modal.querySelector(".contactModal__lead")?.textContent || "";
+  assert.match(kop, /rapport staat klaar/);
+  assert.match(lead, /Zonder vinkje krijgt u het rapport net zo goed/);
+  assert.equal(v.modal.querySelector("[data-contact-submit]")?.textContent, "Downloaden");
+});
+
+test("de knop onder het rapport krijgt de rapportteksten, niet die van het contactvenster", async () => {
+  const v = await laadVenster();
+  v.open("mid_report_full_cta");
+  const kop = v.modal.querySelector("#contactModalTitle")?.textContent || "";
+  assert.match(kop, /Volledig rapport aanvragen/);
+});
+
 // ── De stand mag niet blijven hangen ──────────────────────────────────────────
 
 test("een gewoon contactverzoek vraagt alles weer, ook na een poortaanvraag", async () => {
