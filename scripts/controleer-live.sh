@@ -51,6 +51,20 @@ for v in toegang gegevens_poort een_tool dagplafond centraal pdf; do
   zeg "$v" "$(veld "$v")"
 done
 
+# Onder welke partner de report-api onze sleutel kent. Staat daar niets, dan kan het
+# VOLLEDIGE rapport niet geleverd worden -- het snelle wel, want dat bewaart niets. Zo zag
+# de WoonWijzerWinkel-tenant er wekenlang gezond uit terwijl zijn betaalde product niet
+# werkte, en kwam het pas uit bij de eerste bestelling.
+PARTNER="$(veld rapport_partner)"
+KAN="$(veld rapport_kan_bewaren)"
+if [ "$KAN" = "true" ]; then
+  zeg "rapport_partner" "$PARTNER"
+elif [ -z "$KAN" ]; then
+  zeg "rapport_partner" "niet gemeld (oude runtime?)"
+else
+  fout "rapport_partner" "geen partnernaam ($(veld rapport_partner_reden)) -- het volledige rapport kan niet geleverd worden; staat FULL_APP_RENDER_API_KEY op de gedeelde sleutel?"
+fi
+
 # De cachemarkering: die hoort de inhoud van het bestand te volgen. Loopt hij achter, dan
 # houdt een terugkerende bezoeker de oude app -- en dat is precies hoe de gegevenspoort
 # een ochtend lang voor de helft van de bezoekers niet bestond.
@@ -62,8 +76,10 @@ if printf '%s' "$PAGINA" | grep -q "mid_app.js"; then
       zeg "$NAAM" "geen markering in de pagina"
       continue
     fi
-    LIJF="$(curl -s --max-time 20 "$BASIS/assets/$NAAM" || true)"
-    EIGEN="$(printf '%s' "$LIJF" | sha256sum | cut -c1-10)"
+    # RECHTSTREEKS DOORPIJPEN, niet via een variabele. Een $(...) knipt afsluitende
+    # regelovergangen weg, en dan hash je iets anders dan het bestand -- waarop dit script
+    # bij zijn eerste echte gebruik twee fouten meldde die er niet waren.
+    EIGEN="$(curl -s --max-time 20 "$BASIS/assets/$NAAM" | sha256sum | cut -c1-10)"
     if [ "$MARKERING" = "$EIGEN" ]; then
       zeg "$NAAM" "markering volgt het bestand ($MARKERING)"
     else

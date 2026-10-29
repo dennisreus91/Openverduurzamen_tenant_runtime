@@ -731,6 +731,41 @@ export function createTenantApp(config) {
     return renderUrl.replace(/\/api\/full\/render$/i, "/api/mid/lookup");
   }
 
+  // ── Onder welke partner komen onze rapporten binnen? ────────────────────
+  //
+  // WAAROM DIT IN /health STAAT
+  // Op 29 oktober 2026 bleek dat op deze tenant nog nooit een volledig rapport geleverd
+  // was. De sleutel in FULL_APP_RENDER_API_KEY was de GEDEELDE tenant-sleutel, en die
+  // draagt geen partnernaam. De runtime stuurt bij elk rapport `bewaar_rapport` mee, en
+  // bewaren eist juist een naam -- dus elke aanvraag strandde op een 400.
+  //
+  // Het snelle rapport bewaart niets en werkte wel. De fout trof dus alleen het product
+  // dat verkocht wordt, en was pas zichtbaar als iemand het bestelde: de klant kreeg een
+  // mail dat het niet gelukt was, en de reden stond in een logregel die niemand las.
+  //
+  // De report-api kan die vraag zelf beantwoorden (/api/wie-ben-ik). Door het antwoord in
+  // /health te zetten is een verkeerd gezette sleutel van buiten af te zien, voordat er
+  // iemand op stuit. Een keer opgehaald bij de eerste /health en daarna onthouden: de
+  // sleutel verandert niet zonder herstart.
+  let rapportPartnerBelofte = null;
+
+  function rapportPartnerStand() {
+    if (rapportPartnerBelofte) return rapportPartnerBelofte;
+    const basis = getReportRenderUrl().replace(/\/api\/full\/render$/i, "");
+    rapportPartnerBelofte = (async () => {
+      if (!basis) return { partner: null, kan_bewaren: false, reden: "geen_render_url" };
+      try {
+        const res = await fetch(`${basis}/api/wie-ben-ik`, { headers: buildReportApiHeaders() });
+        if (!res.ok) return { partner: null, kan_bewaren: false, reden: `http_${res.status}` };
+        const d = await res.json();
+        return { partner: d?.partner ?? null, kan_bewaren: d?.kan_bewaren === true };
+      } catch (e) {
+        return { partner: null, kan_bewaren: false, reden: "onbereikbaar" };
+      }
+    })();
+    return rapportPartnerBelofte;
+  }
+
   function buildReportApiHeaders() {
     const headers = { "Content-Type": "application/json" };
     const key = String(process.env.FULL_APP_RENDER_API_KEY || "").trim();
@@ -2311,8 +2346,14 @@ export function createTenantApp(config) {
   // of een tenant zijn bestellingen doorgeeft: het verschil tussen "meldt
   // niets want er was niets" en "meldt niets want hij staat uit" is anders pas
   // zichtbaar als er een bestelling misgaat.
-  app.get("/health", (req, res) =>
-    res.json({
+  app.get("/health", async (req, res) => {
+    // Niet laten wachten op een trage report-api: /health hoort snel te antwoorden, en
+    // "nog niet gemeten" is een eerlijker antwoord dan een time-out.
+    const partnerStand = await Promise.race([
+      rapportPartnerStand(),
+      new Promise((r) => setTimeout(() => r({ partner: null, kan_bewaren: null, reden: "nog_niet_gemeten" }), 2500)),
+    ]);
+    return res.json({
       ok: true,
       tenant: config.id,
       ts: nowIso(),
@@ -2341,9 +2382,15 @@ export function createTenantApp(config) {
       // bij `centraal` hoort dat van buiten af te lezen te zijn, want de
       // sleutel staat in het Render-dashboard en niet in deze repo.
       pdf: Boolean(process.env.PDFBOLT_API_KEY),
+      // Onder welke partner de report-api onze sleutel kent. `kan_bewaren: false` betekent
+      // dat het VOLLEDIGE rapport niet geleverd kan worden -- het snelle wel, want dat
+      // bewaart niets. Zie rapportPartnerStand() voor waarom dit hier staat.
+      rapport_partner: partnerStand.partner,
+      rapport_kan_bewaren: partnerStand.kan_bewaren,
+      ...(partnerStand.reden ? { rapport_partner_reden: partnerStand.reden } : {}),
       afzender_bron: afzenderBron(req),
-    })
-  );
+    });
+  });
 
   // Public brand info — useful for frontends that want to render the
   // current tenant's name/colors without hardcoding them.
