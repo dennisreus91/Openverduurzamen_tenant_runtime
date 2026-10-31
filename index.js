@@ -3097,7 +3097,17 @@ export function createTenantApp(config) {
       // woning -- het .epa blijft leidend -- maar over wat de klant wil en
       // kan. Ze gaan ongekeurd door naar de report-api, die ze valideert.
       const voorkeuren = {};
-      for (const veld of ["max_budget_eur", "gemeentelijke_subsidie_eur"]) {
+      // Het aantal bewoners en het eigen jaarverbruik horen hier ook bij: het
+      // snelle rapport op dit scherm rekent er wel mee. Zelfde vorm, zelfde
+      // reden om ze expliciet te noemen -- dit lijstje is een witte lijst.
+      for (const veld of [
+        "max_budget_eur",
+        "gemeentelijke_subsidie_eur",
+        "aantal_bewoners",
+        "eigen_gas_m3",
+        "eigen_stroom_kwh",
+        "eigen_teruglevering_kwh",
+      ]) {
         const ruw = req.body?.[veld];
         if (ruw === null || ruw === undefined || ruw === "") continue;
         const getal = Number(ruw);

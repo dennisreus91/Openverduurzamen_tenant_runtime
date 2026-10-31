@@ -316,6 +316,56 @@ test("budget, subsidie en verbouwing komen mee in de bestelling op rekening", as
   assert.equal(cd.verbouwing, "ja");
 });
 
+test("het huishouden en het eigen jaarverbruik komen ook mee", async (t) => {
+  // Zelfde reden als hierboven: het snelle rapport op het overdrachtsscherm
+  // rekent met het opgegeven verbruik, en zonder deze velden rekende het
+  // volledige rapport met het gemiddelde van vergelijkbare woningen.
+  const { basis, maak } = await opzet(t);
+  const od = await (await maak(GELDIG)).json();
+  const token = new URL(od.url).searchParams.get("overdracht");
+
+  const r = await fetch(`${basis}/api/overdracht/${token}/bestellen`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      accept_terms: true,
+      aantal_bewoners: "3",
+      eigen_gas_m3: 1100,
+      eigen_stroom_kwh: "2900",
+      eigen_teruglevering_kwh: 0,
+    }),
+  });
+  assert.equal(r.status, 201);
+  const { order_id } = await r.json();
+  const orders = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "full_orders.json"), "utf-8")).orders;
+  const cd = orders.find((o) => o.id === order_id).confirmed_data;
+  assert.equal(cd.aantal_bewoners, 3);
+  assert.equal(cd.eigen_gas_m3, 1100);
+  assert.equal(cd.eigen_stroom_kwh, 2900);
+  assert.equal(cd.eigen_teruglevering_kwh, 0, "nul is een geldige opgave en geen leeg veld");
+});
+
+test("de partnerroute keurt het huishouden en het verbruik op dezelfde grenzen", () => {
+  const met = (extra) => valideerOverdracht({ ...GELDIG, ...extra }, { hosts: ["softbee.nl"] });
+
+  const goed = met({ aantal_bewoners: 3, eigen_gas_m3: 0, eigen_stroom_kwh: "2900" });
+  assert.deepEqual(goed.fouten, {});
+  assert.equal(goed.velden.voorkeuren.aantal_bewoners, 3);
+  assert.equal(goed.velden.voorkeuren.eigen_gas_m3, 0, "nul is geldig");
+  assert.equal(goed.velden.voorkeuren.eigen_stroom_kwh, 2900);
+
+  // Buiten de grenzen is het een typefout en geen opgave; dat hoort een
+  // foutmelding te geven en niet stil geklemd te worden.
+  assert.ok(met({ aantal_bewoners: 0 }).fouten.aantal_bewoners);
+  assert.ok(met({ aantal_bewoners: 25 }).fouten.aantal_bewoners);
+  assert.ok(met({ eigen_gas_m3: 99999 }).fouten.eigen_gas_m3);
+  assert.ok(met({ eigen_stroom_kwh: "veel" }).fouten.eigen_stroom_kwh);
+
+  // Niets meesturen is geen fout: de velden zijn optioneel.
+  assert.deepEqual(met({}).velden.voorkeuren.aantal_bewoners, undefined);
+  assert.deepEqual(met({}).fouten, {});
+});
+
 test("onzin in de voorkeuren komt er niet in, en houdt de bestelling niet tegen", async (t) => {
   const { basis, maak } = await opzet(t);
   const od = await (await maak(GELDIG)).json();
