@@ -39,7 +39,7 @@ import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled
 import { initPrefillStore, createPrefillSession, getPrefillSession, updatePrefillSession, findPrefillSession } from "./lib/prefill_store.js";
 import {
   overdrachtAan, sleutelUitVerzoek, sleutelKlopt, terugHosts, valideerOverdracht, maskeerEmail,
-  webhookAan, bouwMelding, verstuurMelding,
+  webhookAan, bouwMelding, verstuurMelding, OVERDRACHT_DOELLABELS,
 } from "./lib/overdracht.js";
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
@@ -3113,6 +3113,13 @@ export function createTenantApp(config) {
         const getal = Number(ruw);
         if (Number.isFinite(getal)) voorkeuren[veld] = Math.round(getal);
       }
+      // Het doellabel bij het doel "laagste investering". Hoofdletters en
+      // spaties rechttrekken, zoals de report-api dat ook doet; de lijst
+      // staat in lib/overdracht.js. Ongeldig valt hier weg in plaats van door
+      // te glippen -- de report-api zou hem alsnog laten vallen.
+      const doellabel = String(req.body?.doellabel || "").trim().toUpperCase().replace(/\s+/g, "");
+      if (OVERDRACHT_DOELLABELS.includes(doellabel)) voorkeuren.doellabel = doellabel;
+
       const verbouwing = String(req.body?.verbouwing || "").trim();
       if (verbouwing === "ja" || verbouwing === "nee") voorkeuren.verbouwing = verbouwing;
       // Zou de bewoner panelen bij laten plaatsen? Zelfde vorm, en om dezelfde

@@ -316,6 +316,27 @@ test("budget, subsidie en verbouwing komen mee in de bestelling op rekening", as
   assert.equal(cd.verbouwing, "ja");
 });
 
+test("en het doellabel dat de adviseur bij dat doel koos", async (t) => {
+  // Zelfde reden als hierboven, en dezelfde valkuil: beide lijstjes in
+  // index.js zijn witte lijsten. Het snelle rapport op het overdrachtsscherm
+  // rekent naar het gekozen label; zonder deze regel zocht het volledige
+  // rapport van dezelfde woning weer vanaf de standaard A.
+  const { basis, maak } = await opzet(t);
+  const od = await (await maak(GELDIG)).json();
+  const token = new URL(od.url).searchParams.get("overdracht");
+
+  const r = await fetch(`${basis}/api/overdracht/${token}/bestellen`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ accept_terms: true, doel: "laagste_investering", doellabel: " a++ " }),
+  });
+  assert.equal(r.status, 201);
+  const { order_id } = await r.json();
+  const orders = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "full_orders.json"), "utf-8")).orders;
+  const cd = orders.find((o) => o.id === order_id).confirmed_data;
+  assert.equal(cd.doellabel, "A++", "hoofdletters en spaties horen rechtgetrokken te worden");
+});
+
 test("het huishouden en het eigen jaarverbruik komen ook mee", async (t) => {
   // Zelfde reden als hierboven: het snelle rapport op het overdrachtsscherm
   // rekent met het opgegeven verbruik, en zonder deze velden rekende het
@@ -426,6 +447,21 @@ test("de voorkeuren uit de overdracht komen terug op de pagina", async (t) => {
     max_budget_eur: 15000,
     gemeentelijke_subsidie_eur: 1200,
   });
+});
+
+test("de partner mag het doellabel meesturen, en onzin krijgt een melding", async (t) => {
+  const { basis, maak } = await opzet(t);
+  const goed = await maak({ ...GELDIG, doel: "laagste_investering", doellabel: "A+" });
+  assert.equal(goed.status, 201);
+  const token = new URL((await goed.json()).url).searchParams.get("overdracht");
+  const pagina = await (await fetch(`${basis}/api/overdracht/${token}`)).json();
+  assert.equal(pagina.voorkeuren.doellabel, "A+");
+
+  // Stil weglaten mag niet: de partner ziet dan aan niets dat zijn
+  // dossierwaarde niet is aangekomen.
+  const fout = await maak({ ...GELDIG, doellabel: "A++++" });
+  assert.equal(fout.status, 400);
+  assert.match((await fout.json()).field_errors.doellabel, /doellabel moet een van deze zijn/);
 });
 
 test("zonder voorkeuren blijft het veld leeg, niet half gevuld", async (t) => {
