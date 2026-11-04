@@ -83,6 +83,15 @@ async function tenant(t, { gastlogins = "", features = { toegang: true } } = {})
         body: JSON.stringify(AANVRAAG),
       }),
     quota: (cookie) => fetch(`${basis}/api/internal/quota`, { headers: { cookie } }),
+    // Het opzoeken van een woning. Zonder FULL_APP_RENDER_URL loopt de
+    // aanroep erna stuk op een 500; waar het hier om gaat is of de weigering
+    // ervoor komt, en die is een 429.
+    lookup: (cookie, huisnummer = "7") =>
+      fetch(`${basis}/api/mid/lookup`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+        body: JSON.stringify({ postalcode: "1234AB", housenumber: huisnummer }),
+      }),
     // Of de poort opengaat. Een testtenant heeft geen paginasjablonen, dus
     // wie binnen is krijgt een 404 en geen 200; waar het om gaat is dat hij
     // NIET naar de inlogpagina wordt gestuurd.
@@ -104,7 +113,7 @@ function verwachtBinnen(res, bericht = "hoort binnen te zijn") {
 
 test("een regel met drie velden levert een account met eigen limiet", () => {
   const { accounts, klachten } = leesGastlogins({ GASTLOGINS: "Demo@Klant.NL|Wacht|2" });
-  assert.deepEqual(accounts, [{ email: "demo@klant.nl", wachtwoord: "Wacht", dagmax: 2 }]);
+  assert.deepEqual(accounts, [{ email: "demo@klant.nl", wachtwoord: "Wacht", dagmax: 2, telt: "beide" }]);
   assert.deepEqual(klachten, []);
 });
 
@@ -184,7 +193,7 @@ test("de regel weghalen sluit een lopende sessie af", async (t) => {
 
 test("een gast loopt tegen zijn eigen limiet aan, de eigenaar niet", async (t) => {
   const s = await tenant(t, {
-    gastlogins: "limiet@klant.nl|w|1",
+    gastlogins: "limiet@klant.nl|w|1|volledig",
     features: { toegang: true, dagplafond: 100 },
   });
   const gast = (await s.inloggen("limiet@klant.nl", "w")).cookie;
@@ -196,7 +205,7 @@ test("een gast loopt tegen zijn eigen limiet aan, de eigenaar niet", async (t) =
   const uit = await tweede.json();
   assert.equal(uit.code, "accountlimiet_bereikt");
   assert.equal(uit.dagmax, 1);
-  assert.match(uit.error, /vandaag al 1 volledige rapporten/);
+  assert.match(uit.error, /1 volledig rapport per dag/);
 
   // De teller van de tenant staat nu op 1 en het plafond op 100, dus de
   // eigenaar mag nog gewoon. De limiet van de gast is van hem alleen.
@@ -232,4 +241,117 @@ test("een gast ziet zijn eigen stand en niet de omzet van de tenant", async (t) 
   const qe = await (await s.quota(eigenaar)).json();
   assert.ok(qe.history, "de eigenaar ziet wel alles");
   assert.ok(qe.kosten_schatting);
+});
+
+// --- Waar het tegoed voor geldt (4 november 2026) ---------------------------
+//
+// HET GAT. Tot nu toe telde alleen het volledige rapport mee en was het
+// snelle advies onbeperkt. Dat klopte niet met de rekening: het opzoeken van
+// een woning doet vijf betaalde adresaanroepen, circa een euro, en dat
+// gebeurt al bij het snelle advies. Een gast kon dus de hele dag woningen
+// opzoeken zonder dat er ergens een teller liep.
+//
+// Waar het tegoed voor geldt staat nu per account in het vierde veld van
+// GASTLOGINS. Deze tests leggen alle drie de standen vast, want een stand die
+// stil de verkeerde kant op valt kost geld of blokkeert een demo.
+
+test("het vierde veld bepaalt waar het tegoed voor geldt", () => {
+  const lees = (regel, env = {}) => leesGastlogins({ GASTLOGINS: regel, ...env }).accounts[0];
+  assert.equal(lees("a@b.nl|w|3|snel").telt, "snel");
+  assert.equal(lees("a@b.nl|w|3|volledig").telt, "volledig");
+  assert.equal(lees("a@b.nl|w|3|BEIDE").telt, "beide", "hoofdletters horen niet uit te maken");
+
+  // Weggelaten: de standaard, en die is in te stellen voor alle accounts.
+  assert.equal(lees("a@b.nl|w|3").telt, "beide");
+  assert.equal(lees("a@b.nl|w|3", { GASTLOGIN_TELT: "volledig" }).telt, "volledig");
+  assert.equal(lees("a@b.nl|w|3", { GASTLOGIN_TELT: "onzin" }).telt, "beide",
+    "een onleesbare standaard valt terug op beide en niet op niets");
+});
+
+test("een onleesbare keuze wordt gemeld en niet stil genegeerd", () => {
+  // Een typefout in een omgevingsvariabele hoort niet te eindigen in een
+  // account dat stiekem iets anders doet dan er staat.
+  const { accounts, klachten } = leesGastlogins({ GASTLOGINS: "a@b.nl|w|3|alleen-snel" });
+  assert.equal(accounts[0].telt, "beide");
+  assert.equal(klachten.length, 1);
+  assert.match(klachten[0], /alleen-snel/);
+  assert.match(klachten[0], /beide, snel of volledig/);
+});
+
+test("met 'beide' gaat het tegoed ook op aan het opzoeken", async (t) => {
+  const s = await tenant(t, {
+    gastlogins: "beide@klant.nl|w|2|beide",
+    features: { toegang: true, dagplafond: 100 },
+  });
+  const gast = (await s.inloggen("beide@klant.nl", "w")).cookie;
+
+  // Twee opzoekingen passen er precies in. Dat ze daarna stuklopen op een
+  // ontbrekende report-api is prima -- ze zijn langs de poort gekomen.
+  assert.notEqual((await s.lookup(gast, "1")).status, 429, "de eerste opzoeking hoort te mogen");
+  assert.notEqual((await s.lookup(gast, "2")).status, 429, "de tweede ook");
+
+  const derde = await s.lookup(gast, "3");
+  assert.equal(derde.status, 429, "de derde gaat over het tegoed heen");
+  const uit = await derde.json();
+  assert.equal(uit.code, "accountlimiet_bereikt");
+  assert.match(uit.error, /2 rapporten per dag/);
+  assert.equal(uit.telt, "beide");
+
+  // En het volledige rapport is dan ook op: een tegoed, niet twee.
+  assert.equal((await s.render(gast)).status, 429, "het tegoed is gedeeld");
+});
+
+test("met 'volledig' blijft het opzoeken onbeperkt", async (t) => {
+  // Zoals het was. Wie dit zo instelt moet dezelfde tool houden als voor
+  // 4 november 2026.
+  const s = await tenant(t, {
+    gastlogins: "alleenvol@klant.nl|w|1|volledig",
+    features: { toegang: true, dagplafond: 100 },
+  });
+  const gast = (await s.inloggen("alleenvol@klant.nl", "w")).cookie;
+
+  for (const nr of ["1", "2", "3", "4"]) {
+    assert.notEqual((await s.lookup(gast, nr)).status, 429, `opzoeking ${nr} hoort vrij te zijn`);
+  }
+  assert.equal((await s.render(gast)).status, 200, "het eerste volledige rapport gaat door");
+  assert.equal((await s.render(gast)).status, 429, "het tweede niet");
+});
+
+test("met 'snel' telt het volledige rapport niet mee", async (t) => {
+  // DE VAL DIE HIER ZAT. De teller voor een volledig rapport liep altijd,
+  // ongeacht de instelling. Een account op 'snel' raakte daardoor stil zijn
+  // tegoed kwijt aan een rapport dat niet hoorde mee te tellen.
+  const s = await tenant(t, {
+    gastlogins: "alleensnel@klant.nl|w|2|snel",
+    features: { toegang: true, dagplafond: 100 },
+  });
+  const gast = (await s.inloggen("alleensnel@klant.nl", "w")).cookie;
+
+  assert.equal((await s.render(gast)).status, 200, "een volledig rapport mag");
+  const na = await (await s.quota(gast)).json();
+  assert.equal(na.dag_gebruik, 0, "en het hoort niets van het tegoed op te maken");
+
+  assert.notEqual((await s.lookup(gast, "1")).status, 429);
+  assert.notEqual((await s.lookup(gast, "2")).status, 429);
+  assert.equal((await s.lookup(gast, "3")).status, 429, "het opzoeken telt wel");
+});
+
+test("de quotaroute vertelt waar het tegoed voor geldt", async (t) => {
+  // De balk in de tool en de badge op de intakepagina schrijven deze zin
+  // over. Stond hij in de sjablonen, dan had je vier kopieen die uit elkaar
+  // lopen -- en dan denkt iemand dat het om twee tegoeden gaat.
+  const s = await tenant(t, { gastlogins: "zin@klant.nl|w|3|beide" });
+  const gast = (await s.inloggen("zin@klant.nl", "w")).cookie;
+  const uit = await (await s.quota(gast)).json();
+  assert.equal(uit.telt, "beide");
+  assert.match(uit.telt_uitleg, /Elke woning die u opzoekt/);
+  assert.equal(uit.dagmax, 3);
+  assert.equal(uit.dag_resterend, 3);
+});
+
+test("een bezoeker zonder sessie merkt niets van het tegoed", async (t) => {
+  // De publieke route van een tenant zonder toegangspoort mag hier niet door
+  // geraakt worden: die heeft geen account en dus geen tegoed.
+  const s = await tenant(t, { gastlogins: "iemand@klant.nl|w|0|beide", features: { toegang: false } });
+  assert.notEqual((await s.lookup("", "9")).status, 429);
 });

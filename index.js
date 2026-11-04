@@ -52,8 +52,9 @@ import {
   getDagGebruik,
   getDagGebruikVoorAccount,
   verhoogDagteller,
+  verhoogAccountteller,
 } from "./lib/internal_quota.js";
-import { leesGastlogins } from "./lib/gastlogins.js";
+import { leesGastlogins, teltSnel, teltVolledig, teltUitleg } from "./lib/gastlogins.js";
 import { maakSnelheidsgrens } from "./lib/snelheidsgrens.js";
 
 // ---------------------------------------------------------------------------
@@ -665,7 +666,7 @@ export function createTenantApp(config) {
     }
     console.log(
       `[tenant-runtime] ${gastlogins.accounts.length} gastlogin(s) actief: ` +
-      gastlogins.accounts.map((a) => `${a.email} (max ${a.dagmax}/dag)`).join(", ")
+      gastlogins.accounts.map((a) => `${a.email} (max ${a.dagmax}/dag, telt: ${a.telt})`).join(", ")
     );
   }
 
@@ -680,7 +681,7 @@ export function createTenantApp(config) {
     if (!wie) return null;
     if (wie === vastAccountEmail()) return { email: wie, soort: "vast", dagmax: 0 };
     const gast = gastlogins.accounts.find((a) => a.email === wie);
-    return gast ? { email: gast.email, soort: "gast", dagmax: gast.dagmax } : null;
+    return gast ? { email: gast.email, soort: "gast", dagmax: gast.dagmax, telt: gast.telt } : null;
   }
 
   /** Vergelijking in constante tijd; lengteverschil lekt niet via de tijd. */
@@ -1130,7 +1131,22 @@ export function createTenantApp(config) {
     const monthUsage = incrementInternalQuota(dataDir);
     // Het e-mailadres van het account, niet dat van de bewoner: dit is de
     // teller waar de eigen limiet van een gastlogin op rust.
-    const dagGebruik = verhoogDagteller(dataDir, new Date(), req?.internalSession?.email || null);
+    //
+    // ALLEEN ALS HET VOLLEDIGE RAPPORT VOOR DIT ACCOUNT MEETELT. Staat zijn
+    // instelling op "snel", dan gaat zijn tegoed op aan het opzoeken en hoort
+    // het rapport dat daarna komt er niet nog eens af te gaan. Zonder deze
+    // voorwaarde zou dat stil toch gebeuren, want deze regel telde altijd.
+    // De dagteller van de tenant loopt hoe dan ook door -- die telt
+    // rapporten, ongeacht wie ze aanvraagt.
+    const accountVoorTelling = (() => {
+      const wie = req?.internalSession?.account || null;
+      // Alleen een GAST wordt hier overgeslagen; voor het vaste account
+      // blijft de telling gewoon lopen, want die is er voor de boekhouding
+      // en niet voor een limiet.
+      if (wie?.soort === "gast" && !teltVolledig(wie)) return null;
+      return req?.internalSession?.email || null;
+    })();
+    const dagGebruik = verhoogDagteller(dataDir, new Date(), accountVoorTelling);
 
     createOrder({
       id: orderId,
@@ -2120,6 +2136,66 @@ export function createTenantApp(config) {
     return res.json({ ok: true });
   });
 
+  /**
+   * Mag dit gastaccount nog, voor deze soort rapport?
+   *
+   * EEN PLEK, EN DIE GELDT VOOR ALLEBEI DE SOORTEN. Tot 4 november 2026 stond
+   * deze controle twee keer uitgeschreven bij de volledige-rapportroutes, en
+   * helemaal niet bij het opzoeken. Dat laatste was het gat: het opzoeken van
+   * een woning doet vijf betaalde adresaanroepen -- circa een euro -- en dat
+   * gebeurt al bij het snelle advies. Een gast kon dus de hele dag woningen
+   * opzoeken zonder dat er ergens een teller liep.
+   *
+   * Waarvoor het tegoed geldt staat per account in GASTLOGINS (vierde veld:
+   * beide, snel of volledig). Geldt het niet voor deze soort, dan doet deze
+   * functie niets -- geen weigering en geen plek.
+   *
+   * PER AANVRAAG EN NIET PER WONING, en dat is een bewuste keuze. Ik heb het
+   * eerst per woning gebouwd -- dan kost een woning van begin tot eind een
+   * plek -- maar dat klopt niet met de rekening: een volledig rapport kost
+   * elke keer opnieuw een modelaanroep, ook voor een adres dat al eens is
+   * opgezocht. Staat de instelling op "beide", dan gaan er dus twee plekken
+   * af als een gast van het snelle advies doorgaat naar het volledige
+   * rapport. Dat is de bedoeling; de ruimte zet je met dagmax.
+   *
+   * ALLEEN CONTROLEREN, NIET TELLEN. Het volledige rapport telt zichzelf al
+   * mee in createInternalOrder(); zou deze functie dat ook doen, dan ging er
+   * twee af. Het opzoeken heeft zo'n plek niet en telt daarom in de route
+   * zelf, met verhoogAccountteller().
+   *
+   * @param {object|null} account  uit de sessie
+   * @param {"snel"|"volledig"} soort
+   * @returns {object|null} null = doorgaan; anders de body voor een 429.
+   */
+  function gastTegoedBlokkeert(account, soort) {
+    if (account?.soort !== "gast" || !(account.dagmax >= 0)) return null;
+    if (!(soort === "snel" ? teltSnel(account) : teltVolledig(account))) return null;
+
+    const gebruikt = getDagGebruikVoorAccount(dataDir, account.email);
+    if (gebruikt >= account.dagmax) {
+      // De eenheid volgt de instelling, want "volledige rapporten" is
+      // misleidend zodra het opzoeken ook meetelt -- dan is de gast door zijn
+      // tegoed heen zonder ooit een volledig rapport te hebben aangevraagd.
+      const een = account.dagmax === 1;
+      const eenheid = teltSnel(account) && teltVolledig(account)
+        ? (een ? "1 rapport" : `${account.dagmax} rapporten`)
+        : teltSnel(account)
+          ? (een ? "1 woning" : `${account.dagmax} woningen`)
+          : (een ? "1 volledig rapport" : `${account.dagmax} volledige rapporten`);
+      return {
+        error: account.dagmax === 0
+          ? "Dit account kan geen rapporten aanvragen."
+          : `Dit account mag ${eenheid} per dag. Dat tegoed is vandaag op; morgen kan het weer.`,
+        code: "accountlimiet_bereikt",
+        dagmax: account.dagmax,
+        dag_gebruik: gebruikt,
+        telt: account.telt,
+        telt_uitleg: teltUitleg(account),
+      };
+    }
+    return null;
+  }
+
   app.post("/api/internal/full/render", requireInternalSession, async (req, res) => {
     try {
       const epaModel = req.body?.epa_model && typeof req.body.epa_model === "object" ? req.body.epa_model : null;
@@ -2154,19 +2230,8 @@ export function createTenantApp(config) {
       // En de eigen limiet van een gastlogin. Die staat NA het dagplafond,
       // zodat een gast nooit meer ruimte heeft dan de tenant zelf, en hij
       // meldt het aantal erbij: een demo die zonder uitleg stopt lijkt stuk.
-      const account = req.internalSession?.account || null;
-      if (account?.soort === "gast" && account.dagmax >= 0) {
-        const eigenGebruik = getDagGebruikVoorAccount(dataDir, account.email);
-        if (eigenGebruik >= account.dagmax) {
-          return res.status(429).json({
-            error: account.dagmax === 0
-              ? "Dit account kan geen volledige rapporten aanvragen."
-              : `Dit account heeft vandaag al ${account.dagmax} volledige rapporten aangevraagd. Morgen kan het weer.`,
-            code: "accountlimiet_bereikt",
-            dagmax: account.dagmax,
-          });
-        }
-      }
+      const geweigerd = gastTegoedBlokkeert(req.internalSession?.account || null, "volledig");
+      if (geweigerd) return res.status(429).json(geweigerd);
 
       const payload = await createInternalOrder({
         req, email, address, confirmedData, epaModel,
@@ -2244,18 +2309,8 @@ export function createTenantApp(config) {
           dagplafond: plafond,
         });
       }
-      const account = sessie?.account || null;
-      if (account?.soort === "gast" && account.dagmax >= 0) {
-        if (getDagGebruikVoorAccount(dataDir, account.email) >= account.dagmax) {
-          return res.status(429).json({
-            error: account.dagmax === 0
-              ? "Dit account kan geen volledige rapporten aanvragen."
-              : `Dit account heeft vandaag al ${account.dagmax} volledige rapporten aangevraagd. Morgen kan het weer.`,
-            code: "accountlimiet_bereikt",
-            dagmax: account.dagmax,
-          });
-        }
-      }
+      const geweigerd = gastTegoedBlokkeert(sessie?.account || null, "volledig");
+      if (geweigerd) return res.status(429).json(geweigerd);
 
       const payload = await createInternalOrder({
         req, email, address, confirmedData, epaModel: null,
@@ -2294,6 +2349,12 @@ export function createTenantApp(config) {
         dag_gebruik: gebruikt,
         dagmax: account.dagmax,
         dag_resterend: Math.max(0, account.dagmax - gebruikt),
+        // WAAR HET TEGOED VOOR GELDT, in de respons en niet in het sjabloon.
+        // Dezelfde zin hoort op de tool en op de interne intakepagina te
+        // staan, in beide tenants. Vier kopieen die uit elkaar lopen is
+        // precies hoe je iemand laat denken dat het om twee tegoeden gaat.
+        telt: account.telt,
+        telt_uitleg: teltUitleg(account),
       });
     }
 
@@ -2575,6 +2636,24 @@ export function createTenantApp(config) {
       if (!address.postalcode || !address.housenumber) {
         return res.status(400).json({ error: "postalcode en housenumber zijn verplicht." });
       }
+      // HIER ONTSTAAN DE KOSTEN. Deze aanroep doet vijf betaalde
+      // adresaanroepen, circa een euro, en hij gebeurt al bij het snelle
+      // advies. Daarom gaat het tegoed van een gast hier af -- mits zijn
+      // instelling het snelle advies meetelt. Na de veldcontrole, zodat een
+      // half ingevuld formulier geen plek opmaakt, en voor de aanroep, zodat
+      // een geweigerde gast ons ook werkelijk niets kost.
+      const gast = readInternalSession(req)?.account || null;
+      const geweigerd = gastTegoedBlokkeert(gast, "snel");
+      if (geweigerd) return res.status(429).json(geweigerd);
+      // VOOR de aanroep tellen, en dat is een afweging. Loopt het opzoeken
+      // daarna stuk, dan is de plek toch weg. Andersom tellen -- pas na een
+      // geslaagd antwoord -- zou een gat zijn: de report-api doet de betaalde
+      // adresaanroepen eerst en kan daarna alsnog omvallen, en dan hebben we
+      // wel betaald en niets geteld. Een gast die een plek kwijtraakt doordat
+      // onze dienst hapert is het kleinere probleem; de ruimte zet je met
+      // dagmax.
+      if (gast?.soort === "gast" && teltSnel(gast)) verhoogAccountteller(dataDir, gast.email);
+
       const lookup = await fetchLookupFromReportApi(address);
       return res.json(lookup);
     } catch (e) { return res.status(500).json({ error: e?.message || String(e) }); }
