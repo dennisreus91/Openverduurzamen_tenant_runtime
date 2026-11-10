@@ -198,3 +198,31 @@ test("de hulp met de leverancierslinks hangt aan de eigen opgave", () => {
   assert.match(hulpIn(schatting), /display:none/, "verborgen bij een schatting");
   assert.doesNotMatch(hulpIn(eigen), /display:none/);
 });
+
+test("de keuze draagt de stijlen die de tenant-CSS overrulen", () => {
+  // LIVE GEZIEN BIJ DE WOONWIJZERWINKEL, 10 november 2026. Twee regels van de
+  // tenant braken dit blok, en geen van beide is in een DOM-shim te zien:
+  //
+  //   input, select, textarea { width:100%; height:44px; ... }
+  //     -> de radioknop werd 811 bij 44 pixels
+  //   .wizardField label span { color: var(--brand); font-weight:600 }
+  //     -> de hele optietekst werd merkrood en vet
+  //
+  // Vandaar inline stijlen. Deze test is er zodat ze niet als rommel worden
+  // opgeruimd door iemand die de pagina niet in een browser heeft gezien.
+  const html = laad().blokHtml({ waarden: {} });
+  const radios = html.match(/<input type="radio"[^>]*>/g) || [];
+  assert.equal(radios.length, 2);
+  for (const r of radios) {
+    assert.match(r, /width:16px/, "anders rekt input{width:100%} de radio op");
+    assert.match(r, /height:16px/);
+    assert.match(r, /flex:none/);
+  }
+  // Elke span binnen een optielabel moet zijn kleur terugnemen.
+  const keuze = html.slice(html.indexOf("data-verbruik-keuze"), html.indexOf("data-verbruik-groep"));
+  const spans = keuze.match(/<span[^>]*>/g) || [];
+  assert.ok(spans.length >= 4, `verwacht meerdere spans, kreeg ${spans.length}`);
+  for (const s of spans) {
+    assert.match(s, /color:inherit/, `span zonder eigen kleur: ${s}`);
+  }
+});

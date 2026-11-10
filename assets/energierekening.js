@@ -99,6 +99,27 @@
     // invult, en een voorselectie die iets anders belooft dan de uitkomst is
     // erger dan geen voorselectie.
     var gekozen = waarde === "eigen" ? "eigen" : "schatting";
+
+    // TWEE STIJLREGELS VAN DE TENANTS BREKEN DIT BLOK, en daarom staan er
+    // inline stijlen op de radio en op elke span. Live gezien bij de
+    // WoonWijzerWinkel op 10 november 2026:
+    //
+    //   input, select, textarea { width:100%; height:44px; padding:0 13px;
+    //                             border:1px solid ...; border-radius: ... }
+    //     -> de radioknop werd een vak van 811 bij 44 pixels, met het rondje
+    //        midden op de regel en de tekst ver naar rechts geduwd.
+    //
+    //   label .req, .wizardField legend span, .wizardField label span
+    //                           { color: var(--brand); font-weight:600 }
+    //     -> bedoeld voor het sterretje bij een verplicht veld, maar het
+    //        kleurde de hele optietekst merkrood en vet.
+    //
+    // Inline wint van een stylesheetregel zonder !important, dus dit is de
+    // kortste weg die in alle vier de tenants werkt. Haal ze niet weg zonder
+    // in een echte browser te kijken: in een DOM-shim ziet het er goed uit.
+    var RADIO =
+      "width:16px;height:16px;flex:none;min-width:0;padding:0;margin:3px 0 0 0;" +
+      "border:0;border-radius:0;box-shadow:none";
     return (
       '<div class="wizardField" data-verbruik-keuze style="grid-column:1/-1">' +
       "<label>Rekenen wij met een schatting of met uw eigen verbruik?</label>" +
@@ -107,9 +128,11 @@
           return (
             '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-weight:400;cursor:pointer">' +
             '<input type="radio" name="verbruik_bron" data-field="verbruik_bron" value="' + o.waarde + '"' +
-            (o.waarde === gekozen ? " checked" : "") + (uit ? " disabled" : "") + ' style="margin-top:3px" />' +
-            "<span><strong>" + esc(o.label) + "</strong><br/>" +
-            '<span class="wizardHelp">' + esc(o.hulp) + "</span></span>" +
+            (o.waarde === gekozen ? " checked" : "") + (uit ? " disabled" : "") +
+            ' style="' + RADIO + '" />' +
+            '<span style="color:inherit;font-weight:400">' +
+            '<strong style="color:inherit;font-weight:600">' + esc(o.label) + "</strong><br/>" +
+            '<span class="wizardHelp" style="color:inherit;opacity:.72;font-weight:400">' + esc(o.hulp) + "</span></span>" +
             "</label>"
           );
         })
