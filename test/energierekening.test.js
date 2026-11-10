@@ -35,9 +35,14 @@ function laad() {
 // De namen die de report-api verwacht (lib/confirmed_data.js). Deze lijst is
 // de afspraak; hij hoort niet uit het bestand zelf te komen, want dan toetst
 // hij zichzelf.
-const VERWACHTE_VELDEN = ["aantal_bewoners", "eigen_gas_m3", "eigen_stroom_kwh", "eigen_teruglevering_kwh"];
+// Sinds 10 november 2026 staat de KEUZE vooraan: een schatting of het eigen
+// verbruik. Hij hoort in deze lijst omdat hij langs dezelfde witte lijsten
+// loopt als de andere vier -- confirmed_data, de report-api, de ladder.
+const VERWACHTE_VELDEN = ["verbruik_bron", "aantal_bewoners", "eigen_gas_m3", "eigen_stroom_kwh", "eigen_teruglevering_kwh"];
+// De vier getalvelden; `verbruik_bron` is een radiogroep en telt apart.
+const GETALVELDEN = ["aantal_bewoners", "eigen_gas_m3", "eigen_stroom_kwh", "eigen_teruglevering_kwh"];
 
-test("het bestand draait en levert de vier veldnamen die de report-api kent", () => {
+test("het bestand draait en levert de veldnamen die de report-api kent", () => {
   const api = laad();
   assert.ok(api, "window.OVEnergierekening bestaat");
   // Array.from, want het bestand draait in een eigen vm-realm en zijn Array
@@ -50,8 +55,9 @@ test("elk veld staat als invoerveld in de html, met precies die data-field", () 
   for (const veld of VERWACHTE_VELDEN) {
     assert.match(html, new RegExp(`data-field="${veld}"`), `${veld} ontbreekt in het blok`);
   }
-  // Nummervelden, want het zijn getallen en geen keuzes.
-  assert.equal((html.match(/type="number"/g) || []).length, VERWACHTE_VELDEN.length);
+  // Nummervelden, want het zijn getallen; de keuze is een radiogroep.
+  assert.equal((html.match(/type="number"/g) || []).length, GETALVELDEN.length);
+  assert.equal((html.match(/type="radio"/g) || []).length, 2, 'een schatting of het eigen verbruik');
 });
 
 test("ingevulde waarden komen terug in het veld, zodat de omweg naar de leverancier te overleven is", () => {
@@ -106,7 +112,8 @@ test("nergens een inlogveld: de bewoner logt in bij zijn leverancier, niet bij o
 
 test("op een alleen-lezen scherm staan de velden uit", () => {
   const html = laad().blokHtml({ waarden: {}, alleenLezen: true });
-  assert.equal((html.match(/ disabled/g) || []).length, VERWACHTE_VELDEN.length);
+  // Vier getalvelden plus de twee radioknoppen van de keuze.
+  assert.equal((html.match(/ disabled/g) || []).length, GETALVELDEN.length + 2);
 });
 
 test("zonder argumenten valt het blok niet om", () => {
@@ -148,4 +155,46 @@ test("een eigen kopie van de tenant wint, zodat een overstap een voor een kan", 
   const res = await fetch(`${basis}/assets/energierekening.js`);
   assert.equal(res.status, 200);
   assert.match(await res.text(), /eigen kopie/);
+});
+
+// --- De keuze: een schatting of het eigen verbruik (10 november 2026) -------
+
+test("de keuze staat vooraan, met de koopwoning-waarschuwing erbij", () => {
+  const html = laad().blokHtml({ waarden: {} });
+  assert.match(html, /data-verbruik-keuze/);
+  assert.ok(
+    html.indexOf("data-verbruik-keuze") < html.indexOf('data-field="aantal_bewoners"'),
+    "de keuze komt voor de velden die eraan hangen",
+  );
+  // Zonder deze zin vult een koper zijn eigen rekening in en rekent het
+  // rapport met de woning waar hij nu woont.
+  assert.match(html, /wilt <strong>kopen<\/strong>/);
+  assert.match(html, /Kies dan de schatting/);
+});
+
+test("zonder keuze staat 'een schatting' aan, en zijn de eigen velden verborgen", () => {
+  const html = laad().blokHtml({ waarden: {} });
+  assert.match(html, /value="schatting"[^>]* checked/, "schatting is voorgeselecteerd");
+  assert.doesNotMatch(html, /value="eigen"[^>]* checked/);
+  // De groep met de drie getallen staat er wel in -- omschakelen gebeurt in de
+  // browser zonder nieuwe aanroep -- maar verborgen.
+  assert.match(html, /data-verbruik-groep="eigen" style="grid-column:1\/-1;display:none"/);
+  assert.match(html, /data-verbruik-groep="schatting">/, "het aantal bewoners staat juist wel open");
+});
+
+test("met 'eigen' zijn de drie getallen open en staat het aantal bewoners dicht", () => {
+  const html = laad().blokHtml({ waarden: { verbruik_bron: "eigen" } });
+  assert.match(html, /value="eigen"[^>]* checked/);
+  assert.match(html, /data-verbruik-groep="schatting" style="display:none"/);
+  assert.doesNotMatch(html, /data-verbruik-groep="eigen"[^>]*display:none/);
+});
+
+test("de hulp met de leverancierslinks hangt aan de eigen opgave", () => {
+  // Bij een schatting hoeft niemand zijn jaarafrekening op te zoeken, dus die
+  // uitleg hoort daar niet te staan.
+  const schatting = laad().blokHtml({ waarden: {} });
+  const eigen = laad().blokHtml({ waarden: { verbruik_bron: "eigen" } });
+  const hulpIn = (html) => html.slice(html.indexOf("energierekeningHulp") - 200, html.indexOf("energierekeningHulp"));
+  assert.match(hulpIn(schatting), /display:none/, "verborgen bij een schatting");
+  assert.doesNotMatch(hulpIn(eigen), /display:none/);
 });

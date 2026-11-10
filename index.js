@@ -3201,6 +3201,13 @@ export function createTenantApp(config) {
 
       const verbouwing = String(req.body?.verbouwing || "").trim();
       if (verbouwing === "ja" || verbouwing === "nee") voorkeuren.verbouwing = verbouwing;
+      // Schatten of zelf opgeven: de keuze voor de drie verbruiksvelden
+      // (10 november 2026). Hij staat APART van het lijstje hierboven omdat
+      // dat alleen getallen doorlaat -- een tekstkeuze valt daar stil weg, en
+      // dan rekent het rapport met de opgave terwijl de bewoner een schatting
+      // koos. Zelfde lijst als ALLOWED.verbruik_bron in de report-api.
+      const verbruikBron = String(req.body?.verbruik_bron || "").trim();
+      if (verbruikBron === "schatting" || verbruikBron === "eigen") voorkeuren.verbruik_bron = verbruikBron;
       // Zou de bewoner panelen bij laten plaatsen? Zelfde vorm, en om dezelfde
       // reden expliciet genoemd: dit lijstje is een witte lijst, dus een veld
       // dat er niet in staat komt stil niet aan.

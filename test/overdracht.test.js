@@ -491,3 +491,27 @@ test("een voorkeur die niet klopt wordt gemeld, niet weggelaten", async (t) => {
   const goed = await maak({ ...GELDIG, gemeentelijke_subsidie_eur: 0 });
   assert.equal(goed.status, 201);
 });
+
+test("en de keuze schatting-of-eigen, die geen getal is", async (t) => {
+  // Dezelfde valkuil als het doellabel, maar scherper: het lijstje in index.js
+  // dat de voorkeuren doorlaat rekent alles naar een GETAL. Een tekstkeuze
+  // valt daar stil weg, en dan rekent het volledige rapport met de opgave
+  // terwijl de bewoner op het vorige scherm "een schatting" koos.
+  const { basis, maak } = await opzet(t);
+  const od = await (await maak(GELDIG)).json();
+  const token = new URL(od.url).searchParams.get("overdracht");
+
+  const r = await fetch(`${basis}/api/overdracht/${token}/bestellen`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ accept_terms: true, verbruik_bron: "schatting", eigen_gas_m3: 1234 }),
+  });
+  assert.equal(r.status, 201);
+  const { order_id } = await r.json();
+  const orders = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "full_orders.json"), "utf-8")).orders;
+  const cd = orders.find((o) => o.id === order_id).confirmed_data;
+  assert.equal(cd.verbruik_bron, "schatting");
+  // Het getal mag meekomen -- de report-api beslist wat ermee gebeurt -- maar
+  // de keuze hoort erbij te staan, anders wint het getal daar.
+  assert.equal(cd.eigen_gas_m3, 1234);
+});

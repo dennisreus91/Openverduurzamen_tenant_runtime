@@ -34,6 +34,25 @@
  * NOOIT INLOGGEGEVENS IN ONZE TOOL. De link gaat naar de site van de
  * leverancier, in een nieuw tabblad. Dat lijkt vanzelfsprekend, maar het staat
  * hier zodat niemand het later "handiger" maakt.
+ *
+ * EERST DE KEUZE, DAN DE VELDEN (10 november 2026)
+ * De drie verbruiksvelden stonden altijd in beeld en leken verplicht, terwijl
+ * de meeste mensen die cijfers niet bij de hand hebben. Nu kiest de bewoner
+ * eerst: een schatting, of zijn eigen verbruik. Bij een schatting vragen wij
+ * alleen het aantal bewoners; bij een eigen opgave de drie getallen van de
+ * jaarafrekening.
+ *
+ * En een waarschuwing die er niet stond: gaat het om een woning die de
+ * bezoeker wil KOPEN, dan hoort zijn eigen jaarverbruik bij zijn huidige
+ * woning en niet bij deze. Dan is de schatting beter. Zonder die zin vult een
+ * koper zijn eigen rekening in en rekent het rapport met het verkeerde huis.
+ *
+ * DE OMSCHAKELING ZIT IN DIT BESTAND, met een gedelegeerde listener op
+ * document. Niet in de vier tenant-apps: die tekenen dit blok als string en
+ * zouden elk hun eigen omschakeling krijgen -- vier kopieen die uiteenlopen,
+ * precies waarom dit bestand bestaat. Het veld `verbruik_bron` staat in
+ * VELDEN, dus de bestaande invoerafhandeling van elke app slaat hem op zonder
+ * dat daar iets hoeft te veranderen.
  */
 (function () {
   "use strict";
@@ -71,6 +90,61 @@
     );
   }
 
+  function keuzeveld(waarde, uit) {
+    var opties = [
+      { waarde: "schatting", label: "Een schatting", hulp: "Op basis van gemeten verbruik van vergelijkbare woningen (CBS)." },
+      { waarde: "eigen", label: "Mijn eigen verbruik", hulp: "De drie getallen van uw jaarafrekening." },
+    ];
+    // Zonder keuze staat "schatting" aan: dat is wat er gebeurt als je niets
+    // invult, en een voorselectie die iets anders belooft dan de uitkomst is
+    // erger dan geen voorselectie.
+    var gekozen = waarde === "eigen" ? "eigen" : "schatting";
+    return (
+      '<div class="wizardField" data-verbruik-keuze style="grid-column:1/-1">' +
+      "<label>Rekenen wij met een schatting of met uw eigen verbruik?</label>" +
+      opties
+        .map(function (o) {
+          return (
+            '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-weight:400;cursor:pointer">' +
+            '<input type="radio" name="verbruik_bron" data-field="verbruik_bron" value="' + o.waarde + '"' +
+            (o.waarde === gekozen ? " checked" : "") + (uit ? " disabled" : "") + ' style="margin-top:3px" />' +
+            "<span><strong>" + esc(o.label) + "</strong><br/>" +
+            '<span class="wizardHelp">' + esc(o.hulp) + "</span></span>" +
+            "</label>"
+          );
+        })
+        .join("") +
+      '<p class="wizardHelp" style="margin-top:4px">' +
+      "Gaat het om een woning die u wilt <strong>kopen</strong>? Kies dan de schatting: uw eigen " +
+      "jaarverbruik hoort bij de woning waar u nu woont, niet bij deze." +
+      "</p>" +
+      "</div>"
+    );
+  }
+
+  /** De groepen omschakelen op de gekozen bron. */
+  function pasKeuzeToe(sectie) {
+    if (!sectie) return;
+    var radio = sectie.querySelector('input[name="verbruik_bron"]:checked');
+    var eigen = Boolean(radio) && radio.value === "eigen";
+    var groepen = sectie.querySelectorAll("[data-verbruik-groep]");
+    for (var i = 0; i < groepen.length; i += 1) {
+      var hoort = groepen[i].getAttribute("data-verbruik-groep") === (eigen ? "eigen" : "schatting");
+      groepen[i].style.display = hoort ? "" : "none";
+    }
+  }
+
+  // Een gedelegeerde listener, en hij overleeft het hertekenen van het blok.
+  // `change` en niet `input`: een radio stuurt beide, en change is de
+  // gebeurtenis die ook bij toetsenbordgebruik precies een keer komt.
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("change", function (e) {
+      var t = e && e.target;
+      if (!t || t.name !== "verbruik_bron") return;
+      pasKeuzeToe(t.closest ? t.closest("[data-energierekening]") : null);
+    });
+  }
+
   /**
    * Het hele blok.
    *
@@ -83,6 +157,7 @@
     var o = opties || {};
     var d = o.waarden || {};
     var uit = Boolean(o.alleenLezen);
+    var eigenGekozen = d.verbruik_bron === "eigen";
 
     var lijst = LEVERANCIERS.map(function (l) {
       return (
@@ -98,19 +173,30 @@
       '<span class="wizardSectionMeta">Optioneel</span>' +
       "</div>" +
       '<p class="wizardSectionHelp">' +
-      "Het aantal huisgenoten maakt de schatting van uw stroomverbruik een stuk scherper. " +
-      "Vult u ook uw eigen jaarverbruik in, dan rekenen wij met uw werkelijke rekening in " +
-      "plaats van met het gemiddelde van vergelijkbare woningen." +
+      "Wij rekenen met een schatting op basis van vergelijkbare woningen, of met uw eigen " +
+      "jaarverbruik als u dat bij de hand hebt. Uw eigen cijfers zijn scherper: binnen een " +
+      "groep vergelijkbare woningen verschilt het gasverbruik een factor twee tot drie." +
       "</p>" +
       '<div class="wizardGrid">' +
+      keuzeveld(d.verbruik_bron, uit) +
+      // Het aantal bewoners hoort bij de SCHATTING: het is het enige gegeven
+      // dat geen bron over een woning weet, en bij een eigen opgave niet meer
+      // nodig. Gas hangt aan de woning, stroom aan het huishouden.
+      '<div data-verbruik-groep="schatting"' + (eigenGekozen ? ' style="display:none"' : "") + ">" +
       nummerveld("aantal_bewoners", "Aantal bewoners", "Bijvoorbeeld 3", d.aantal_bewoners, uit) +
+      "</div>" +
+      '<div data-verbruik-groep="eigen" style="grid-column:1/-1' + (eigenGekozen ? "" : ";display:none") + '">' +
+      '<div class="wizardGrid">' +
       nummerveld("eigen_gas_m3", "Gasverbruik per jaar (m³)", "Bijvoorbeeld 1100", d.eigen_gas_m3, uit) +
       nummerveld("eigen_stroom_kwh", "Stroomverbruik per jaar (kWh)", "Bijvoorbeeld 2900", d.eigen_stroom_kwh, uit) +
       nummerveld("eigen_teruglevering_kwh", "Teruglevering per jaar (kWh)", "Bijvoorbeeld 2400", d.eigen_teruglevering_kwh, uit) +
       "</div>" +
+      "</div>" +
+      "</div>" +
       // De stijl staat hier en niet in mid_styles.css, om dezelfde reden als
       // de HTML: vier kopieen van een stijlblad lopen uiteen. Het is weinig,
       // en het leunt verder op de bestaande wizard-klassen.
+      '<div data-verbruik-groep="eigen"' + (eigenGekozen ? "" : ' style="display:none"') + '>' +
       '<details class="energierekeningHulp" style="margin-top:10px">' +
       '<summary style="cursor:pointer;font-size:14px;color:inherit">Waar vind ik dit?</summary>' +
       '<p class="wizardHelp">' +
@@ -127,12 +213,16 @@
       "U logt in op de site van uw leverancier, nooit bij ons." +
       "</p>" +
       "</details>" +
+      "</div>" +
       "</section>"
     );
   }
 
   /** De velden die dit blok beheert. Voor de invoerafhandeling in mid_app.js. */
-  var VELDEN = ["aantal_bewoners", "eigen_gas_m3", "eigen_stroom_kwh", "eigen_teruglevering_kwh"];
+  // `verbruik_bron` staat hier bewust bij: elke tenant-app spreidt deze lijst
+  // in haar invoerafhandeling, dus zo wordt de keuze opgeslagen zonder dat er
+  // in vier apps iets hoeft te veranderen.
+  var VELDEN = ["verbruik_bron", "aantal_bewoners", "eigen_gas_m3", "eigen_stroom_kwh", "eigen_teruglevering_kwh"];
 
   window.OVEnergierekening = { blokHtml: blokHtml, VELDEN: VELDEN, LEVERANCIERS: LEVERANCIERS };
 })();
