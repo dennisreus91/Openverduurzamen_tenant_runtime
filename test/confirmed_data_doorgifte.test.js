@@ -49,6 +49,41 @@ test("zonder keuze blijft het veld weg, zodat de order niet verandert", () => {
   }
 });
 
+// DRIE STANDEN EN EEN DIKTETABEL, 13 november 2026.
+//
+// Twee vormen die het formulier sinds vandaag stuurt en die deze functie
+// eerder niet kende. De lijst kwam wel door (elke array komt door), de
+// diktetabel niet: die is een object, en objecten werden overgeslagen. Het
+// snelle rapport rekende dus mét de opgegeven dikte en het volledige zonder,
+// voor dezelfde woning -- exact het verschil dat deze functie niet meer hoort
+// te maken.
+test("de afwezig-lijst en de diktetabel komen door", () => {
+  const uit = normalizeConfirmedDataInput({
+    ...VOLLEDIG,
+    existing_measures: ["dakisolatie"],
+    existing_measures_afwezig: ["vloerisolatie"],
+    isolatiedikte_mm: { dakisolatie: 120 },
+  });
+  assert.deepEqual(uit.existing_measures_afwezig, ["vloerisolatie"]);
+  assert.deepEqual(uit.isolatiedikte_mm, { dakisolatie: 120 }, "de diktetabel valt weg op weg naar het volledige rapport");
+});
+
+test("een diktetabel met onzin erin levert geen veld op", () => {
+  // Alleen getallen, één niveau diep. Dat is wat de report-api in dit veld
+  // toelaat, en het houdt de order klein.
+  const uit = normalizeConfirmedDataInput({
+    ...VOLLEDIG,
+    isolatiedikte_mm: { dakisolatie: "geen idee", vloerisolatie: null },
+  });
+  assert.equal("isolatiedikte_mm" in uit, false);
+
+  const gemengd = normalizeConfirmedDataInput({
+    ...VOLLEDIG,
+    isolatiedikte_mm: { dakisolatie: "120", vloerisolatie: "geen idee" },
+  });
+  assert.deepEqual(gemengd.isolatiedikte_mm, { dakisolatie: 120 }, "tekst die een getal is mag wel");
+});
+
 test("onzin in het doelveld gaat er ongewijzigd door en wordt verderop genegeerd", () => {
   // De runtime keurt niet: de report-api heeft de lijst met toegestane
   // waarden (ALLOWED.verduurzamingsdoel) en negeert wat daar niet in staat.

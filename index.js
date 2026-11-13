@@ -289,7 +289,28 @@ function normalizeConfirmedDataInput(data = {}) {
       if (lijst.length) uit[sleutel] = lijst.slice(0, MAX_CONFIRMED_LIJST);
       continue;
     }
-    if (typeof waarde === "object") continue;
+    // EEN PLATTE TABEL VAN GETALLEN MAG WEL, en zonder dit viel er stil een
+    // veld weg. `isolatiedikte_mm` is zo'n tabel: { dakisolatie: 120 }. Die
+    // vorm is geen lijst en geen tekst, dus hij belandde hier en werd
+    // overgeslagen -- het snelle rapport (dat de body ongewijzigd doorgeeft)
+    // rekende mét de opgegeven dikte en het volledige zonder. Precies het
+    // verschil dat deze functie niet meer hoort te maken; zie de kop
+    // hierboven en test/confirmed_data_doorgifte.test.js.
+    //
+    // Alleen één niveau diep en alleen getallen: dat is wat de report-api in
+    // dit veld toelaat (lib/confirmed_data.js), en het houdt de order klein.
+    if (typeof waarde === "object") {
+      const tabel = {};
+      let sleutels = 0;
+      for (const [k, v] of Object.entries(waarde)) {
+        if (++sleutels > MAX_CONFIRMED_LIJST) break;
+        const getal = Number(v);
+        if (v === null || v === "" || !Number.isFinite(getal)) continue;
+        tabel[String(k).trim().slice(0, MAX_CONFIRMED_TEKST)] = getal;
+      }
+      if (Object.keys(tabel).length) uit[sleutel] = tabel;
+      continue;
+    }
     if (typeof waarde === "number" || typeof waarde === "boolean") {
       uit[sleutel] = waarde;
       continue;
