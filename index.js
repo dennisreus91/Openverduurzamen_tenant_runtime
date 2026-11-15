@@ -3073,6 +3073,12 @@ export function createTenantApp(config) {
         label: p.official?.label || null,
         registratienummer: p.registratienummer || null,
         geregistreerd: Boolean(p.is_registered),
+        // Een opname zonder geregistreerd label (16 november 2026): de
+        // report-api leidt het label dan af uit de berekende warmtebehoefte.
+        // `label` is dan GEEN registratie en kan na de registratie een label
+        // afwijken. Alleen aanwezig als het zo is, zodat een partner die dit
+        // veld niet kent hetzelfde antwoord krijgt als voorheen.
+        ...(p.official?.ep2_afgeleid === true ? { label_afgeleid: true } : {}),
       },
     });
   });

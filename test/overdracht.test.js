@@ -167,6 +167,31 @@ test("een afgewezen bestand komt met de foutcode van de report-api terug bij de 
   assert.equal((await r.json()).code, "epa_not_registered");
 });
 
+// EEN OPNAME ZONDER GEREGISTREERD LABEL (16 november 2026).
+//
+// Softbee levert vooral bestanden aan die nog niet zijn geregistreerd. De
+// report-api leidt het label dan af; de partner moet in de samenvatting kunnen
+// zien dat `label` geen registratie is, en een geregistreerd bestand houdt
+// precies het antwoord van voorheen.
+test("een afgeleid label staat er in de samenvatting als zodanig bij", async (t) => {
+  const afgeleid = { status: 200, body: { model: { ...MODEL, official: { label: "E", ep2_afgeleid: true } },
+    preview: { address: PREVIEW.address, official: { label: "E", ep2_afgeleid: true }, is_registered: false, registratienummer: null } } };
+  const { maak } = await opzet(t, { ingest: afgeleid });
+  const r = await maak(GELDIG);
+  assert.equal(r.status, 201);
+  const od = await r.json();
+  assert.equal(od.samenvatting.label, "E");
+  assert.equal(od.samenvatting.geregistreerd, false);
+  assert.equal(od.samenvatting.label_afgeleid, true);
+});
+
+test("een geregistreerd label krijgt het veld label_afgeleid niet", async (t) => {
+  const { maak } = await opzet(t);
+  const od = await (await maak(GELDIG)).json();
+  assert.equal(od.samenvatting.geregistreerd, true);
+  assert.equal("label_afgeleid" in od.samenvatting, false);
+});
+
 test("van overdracht tot bestelling: één bestelling per link, op rekening, en getekend gemeld", async (t) => {
   const { basis, maak, meldingen } = await opzet(t);
 

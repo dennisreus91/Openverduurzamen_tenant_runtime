@@ -64,7 +64,7 @@ browser of in de link.
 
 | Veld | Verplicht | Betekenis |
 |---|---|---|
-| `epa_base64` | ja | Het geregistreerde .epa-bestand (NTA 8800 0-meting), base64. Maximaal ca. 14 MB. |
+| `epa_base64` | ja | Het .epa-bestand (NTA 8800 0-meting), base64. Maximaal ca. 14 MB. Ook een opname die nog niet is geregistreerd wordt aangenomen; zie `label_afgeleid` hieronder. |
 | `adviseur_id` | ja | Uw kenmerk van de adviseur, waarop u factureert. Max. 100 tekens: letters, cijfers, `. _ : -`. Geen naam. |
 | `adviseur_email` | ja | Waar het rapport heen gaat. |
 | `dossier_id` | nee | Uw kenmerk van het dossier of de opname, voor support. Zelfde tekens als `adviseur_id`. |
@@ -104,6 +104,15 @@ merkt.
   }
 }
 ```
+
+**Een opname zonder geregistreerd label.** Het bestand heeft dan geen EP2 en geen
+label; wij leiden het label af uit de berekende warmtebehoefte van de opname.
+`geregistreerd` is dan `false`, `registratienummer` is `null` en er staat een
+extra veld `"label_afgeleid": true` bij. Dat `label` is een indicatie (gemiddeld
+19 kWh/m² ernaast; bij ongeveer twee van de drie woningen hetzelfde label als de
+registratie) en kan na de registratie een label afwijken: toon het niet als
+geregistreerd label. Het veld ontbreekt bij een geregistreerd bestand, dus uw
+bestaande koppeling blijft werken.
 
 Stuur de adviseur naar `url` (nieuw tabblad of doorverwijzing). Bewaar
 `overdracht_id`: daarmee vraagt u de stand op en die staat in elke melding.
@@ -241,7 +250,7 @@ Foutantwoorden zien er zo uit: `{ "error": "<tekst>", "code": "<code>", "field_e
 | 400 | `ongeldige_invoer` | Een veld ontbreekt of klopt niet; zie `field_errors`. |
 | 401 | `sleutel_ongeldig` | Sleutel ontbreekt of klopt niet. |
 | 404 | `overdracht_onbekend` | Onbekende of verlopen overdracht. |
-| 422 | `epa_not_registered` | Het bestand bevat geen geregistreerd label (geen EP2). Stuur de geregistreerde 0-meting. |
+| 422 | `epa_not_registered` | Het bestand heeft geen geregistreerd label én het label is er niet uit af te leiden: de woning wordt niet op gas verwarmd, er staan zonnepanelen zonder vermogen in, of de opname is nog niet doorgerekend. `error` noemt de reden. Stuur het geregistreerde bestand. |
 | 422 | `zip_encrypted` | Het bestand is met een wachtwoord beveiligd. Opslaan zonder beveiliging. |
 | 422 | `epa_legacy_format` | Oud bestand van vóór NTA 8800. |
 | 422 | `not_zip_or_xml`, `no_xml_entry`, `xml_parse_error`, `xml_unrecognized_schema`, `unknown_zip_method`, `invalid_base64` | Geen bruikbaar .epa-bestand. |
