@@ -65,6 +65,7 @@ browser of in de link.
 | Veld | Verplicht | Betekenis |
 |---|---|---|
 | `epa_base64` | ja | Het .epa-bestand (NTA 8800 0-meting), base64. Maximaal ca. 14 MB. Ook een opname die nog niet is geregistreerd wordt aangenomen; zie `label_afgeleid` hieronder. |
+| `ep2_kwh_m2` | nee | Het EP2 (primair fossiel energiegebruik, kWh/m² per jaar, 0 tot 1200) dat Vabi bij een opname toont die nog niet is geregistreerd. Alleen nodig als wij het label niet zelf kunnen afleiden (warmtepomp, warmtenet, elektrisch verwarmd): dan krijgt u 422 `epa_not_registered` met `ep2_invullen`. Stuur het bestand opnieuw mee met dit veld; het label volgt uit het EP2 en `samenvatting.ep2_door_adviseur` is dan `true`. |
 | `adviseur_id` | ja | Uw kenmerk van de adviseur, waarop u factureert. Max. 100 tekens: letters, cijfers, `. _ : -`. Geen naam. |
 | `adviseur_email` | ja | Waar het rapport heen gaat. |
 | `dossier_id` | nee | Uw kenmerk van het dossier of de opname, voor support. Zelfde tekens als `adviseur_id`. |
@@ -113,6 +114,13 @@ extra veld `"label_afgeleid": true` bij. Dat `label` is een indicatie (gemiddeld
 registratie) en kan na de registratie een label afwijken: toon het niet als
 geregistreerd label. Het veld ontbreekt bij een geregistreerd bestand, dus uw
 bestaande koppeling blijft werken.
+
+**Een opname die wij niet kunnen afleiden** (warmtepomp, warmtenet of elektrisch
+verwarmd, zonder geregistreerd EP2) geeft `422` met `code: "epa_not_registered"` en
+een blok `ep2_invullen` (`veld`, `min`, `max`, `eenheid`, `toelichting`,
+`stuur_mee_als: "ep2_kwh_m2"`). Vraag de adviseur het EP2 uit Vabi en stuur
+dezelfde aanvraag opnieuw met `ep2_kwh_m2`. Het label is dan niet geregistreerd
+(`geregistreerd: false`) maar wel exact zoals het EP2 het geeft; wij tonen het zo.
 
 Stuur de adviseur naar `url` (nieuw tabblad of doorverwijzing). Bewaar
 `overdracht_id`: daarmee vraagt u de stand op en die staat in elke melding.

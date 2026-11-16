@@ -3005,6 +3005,8 @@ export function createTenantApp(config) {
       r = await leesBestandBijReportApi("/api/epa/ingest", {
         epa_base64: velden.epa_base64,
         validatieformulier: true,
+        // Het EP2 uit Vabi, als de partner het meestuurt (ep2_kwh_m2).
+        ...(velden.ep2_kwh_m2 != null ? { opname_correcties: { "official.beng2_primary_fossil_kwh_m2": velden.ep2_kwh_m2 } } : {}),
       });
     } catch (e) {
       if (e?.geenRenderUrl) return res.status(500).json({ error: "De rapportdienst is niet ingesteld.", code: "niet_ingesteld" });
@@ -3023,6 +3025,9 @@ export function createTenantApp(config) {
       return res.status(bestand ? 422 : 502).json({
         error: (bestand && j?.error) || (bestand ? "Het .epa-bestand kon niet worden uitgelezen." : "De rapportdienst gaf een fout. Probeer het opnieuw."),
         code: (bestand && j?.code) || (bestand ? "epa_onleesbaar" : "rapportdienst_fout"),
+        // Kan het label niet worden afgeleid, dan zegt dit welk veld de partner
+        // alsnog kan meesturen (`ep2_kwh_m2`) en binnen welke grenzen.
+        ...(bestand && j?.ep2_invullen ? { ep2_invullen: { ...j.ep2_invullen, stuur_mee_als: "ep2_kwh_m2" } } : {}),
       });
     }
 
@@ -3079,6 +3084,8 @@ export function createTenantApp(config) {
         // afwijken. Alleen aanwezig als het zo is, zodat een partner die dit
         // veld niet kent hetzelfde antwoord krijgt als voorheen.
         ...(p.official?.ep2_afgeleid === true ? { label_afgeleid: true } : {}),
+        // Het label volgt uit het EP2 dat de partner meestuurde: exact, maar nog niet geregistreerd.
+        ...(p.official?.ep2_door_adviseur === true ? { ep2_door_adviseur: true } : {}),
       },
     });
   });

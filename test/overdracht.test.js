@@ -540,3 +540,56 @@ test("en de keuze schatting-of-eigen, die geen getal is", async (t) => {
   // de keuze hoort erbij te staan, anders wint het getal daar.
   assert.equal(cd.eigen_gas_m3, 1234);
 });
+
+// EP2 UIT VABI (16 november 2026). Waar de report-api het label niet kan
+// afleiden, krijgt de partner de reden en het veld terug, en kan hij de
+// aanvraag met het EP2 herhalen.
+test("een bestand dat wij niet kunnen afleiden geeft ep2_invullen terug aan de partner", async (t) => {
+  const invullen = { veld: "official.beng2_primary_fossil_kwh_m2", min: 0, max: 1200, eenheid: "kWh/m² per jaar", toelichting: "Vul het EP2 in." };
+  const { maak } = await opzet(t, {
+    ingest: { status: 422, body: { error: "Niet geregistreerd", code: "epa_not_registered", reden: "niet_gasverwarmd", ep2_invullen: invullen } },
+  });
+  const r = await maak(GELDIG);
+  assert.equal(r.status, 422);
+  const j = await r.json();
+  assert.equal(j.code, "epa_not_registered");
+  assert.equal(j.ep2_invullen.stuur_mee_als, "ep2_kwh_m2");
+  assert.equal(j.ep2_invullen.max, 1200);
+});
+
+test("ep2_kwh_m2 gaat als correctie naar de report-api en komt terug in de samenvatting", async (t) => {
+  let ontvangen = null;
+  const reportApi = await server(t, async (req, res) => {
+    ontvangen = JSON.parse(await leesBody(req));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      model: { ...MODEL, official: { label: "A++", ep2_door_adviseur: true } },
+      preview: { address: PREVIEW.address, official: { label: "A++", ep2_door_adviseur: true }, is_registered: false, registratienummer: null },
+    }));
+  });
+  process.env.FULL_APP_RENDER_URL = `${reportApi}/api/full/render`;
+  process.env.OVERDRACHT_API_KEY = SLEUTEL;
+  process.env.OVERDRACHT_TERUG_HOSTS = "softbee.nl";
+  t.after(() => { for (const k of ["FULL_APP_RENDER_URL", "OVERDRACHT_API_KEY", "OVERDRACHT_TERUG_HOSTS"]) delete process.env[k]; });
+  const basis = await server(t, createTenantApp({ id: "testtenant", brand: { name: "Test" }, payment: { priceEur: 30 } }));
+  const r = await fetch(`${basis}/api/epa/overdracht`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": SLEUTEL },
+    body: JSON.stringify({ ...GELDIG, ep2_kwh_m2: "63,5" }),
+  });
+  assert.equal(r.status, 201);
+  assert.deepEqual(ontvangen.opname_correcties, { "official.beng2_primary_fossil_kwh_m2": 63.5 });
+  const od = await r.json();
+  assert.equal(od.samenvatting.ep2_door_adviseur, true);
+  assert.equal(od.samenvatting.geregistreerd, false);
+});
+
+test("ep2_kwh_m2 buiten de grenzen of geen getal wordt gemeld, en ontbreken is geen fout", () => {
+  const met = (extra) => valideerOverdracht({ ...GELDIG, ...extra }, { hosts: ["softbee.nl"] });
+  assert.equal(met({}).velden.ep2_kwh_m2, null);
+  assert.equal(met({ ep2_kwh_m2: 96.4 }).velden.ep2_kwh_m2, 96.4);
+  assert.equal(met({ ep2_kwh_m2: "96,4" }).velden.ep2_kwh_m2, 96.4);
+  assert.ok(met({ ep2_kwh_m2: 5000 }).fouten.ep2_kwh_m2);
+  assert.ok(met({ ep2_kwh_m2: -3 }).fouten.ep2_kwh_m2);
+  assert.ok(met({ ep2_kwh_m2: "veel" }).fouten.ep2_kwh_m2);
+});
