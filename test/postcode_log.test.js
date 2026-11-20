@@ -41,3 +41,29 @@ test("opzoeken, downloaden en aanvragen geven de conversie per postcode", () => 
   const ruw = fs.readFileSync(path.join(dir, "postcode_log.jsonl"), "utf-8");
   assert.doesNotMatch(ruw, /@|housenumber/);
 });
+
+test("de postcode gaat ook naar de centrale database, met alleen postcode en gebeurtenis", async (t) => {
+  const { meldPostcode } = await import("../lib/centraal.js");
+  assert.deepEqual(await meldPostcode("3131KZ", "opgezocht"), { gemeld: false, reden: "centraal_uit" });
+
+  const http = await import("node:http");
+  const ontvangen = [];
+  const server = http.createServer((req, res) => {
+    let b = "";
+    req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      ontvangen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(b) });
+      res.writeHead(201, { "Content-Type": "application/json" });
+      res.end('{"id":7}');
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }));
+  process.env.CENTRAAL_API_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.CENTRAAL_API_SLEUTEL = "x".repeat(40);
+  t.after(() => { delete process.env.CENTRAAL_API_URL; delete process.env.CENTRAAL_API_SLEUTEL; });
+
+  assert.deepEqual(await meldPostcode("3131KZ", "rapport_gedownload"), { gemeld: true, id: 7 });
+  assert.equal(ontvangen[0].url, "/api/v1/postcodes");
+  assert.deepEqual(ontvangen[0].body, { postcode: "3131KZ", gebeurtenis: "rapport_gedownload" });
+});
