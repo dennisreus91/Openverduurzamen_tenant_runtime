@@ -44,6 +44,7 @@ import {
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
 import { rapportprofiel } from "./lib/rapportprofiel.js";
+import { legPostcodeVast, leesPostcodes, postcodeOverzicht, alsCsv } from "./lib/postcode_log.js";
 import { rapportVragenAan, rapportVragen, leesRapportWensen, toestemmingUitWensen, toestemmingsTekstUitWensen } from "./lib/rapport_wensen.js";
 import {
   getCurrentMonthUsage,
@@ -2265,6 +2266,7 @@ export function createTenantApp(config) {
           toestemming: req.body?.akkoord === true,
         },
       });
+      if (postcodeLogAan()) legPostcodeVast({ postcode: address.postalcode, gebeurtenis: "volledig_aangevraagd", tenant: config.id });
       return res.json(payload);
     } catch (e) {
       return res.status(500).json({ error: e?.message || String(e) });
@@ -2343,6 +2345,7 @@ export function createTenantApp(config) {
           toestemming: req.body?.akkoord === true,
         },
       });
+      if (postcodeLogAan()) legPostcodeVast({ postcode: address.postalcode, gebeurtenis: "volledig_aangevraagd", tenant: config.id });
       return res.json(payload);
     } catch (e) {
       return res.status(500).json({ error: e?.message || String(e) });
@@ -2519,6 +2522,30 @@ export function createTenantApp(config) {
     };
   }
 
+  /** Postcodes vastleggen (lib/postcode_log.js)? Standaard aan; uit met features.postcodeLog: false. */
+  function postcodeLogAan() {
+    return config.features?.postcodeLog !== false;
+  }
+
+  // Het overzicht van de postcodes: per postcode (of ?niveau=pc4) hoe vaak opgezocht,
+  // gedownload en aangevraagd, met de conversie. ?format=csv voor Excel, ?vanaf=2026-11-01.
+  //
+  // ALLEEN MET ADMIN_API_KEY. requireAdminKey() laat alles door als die sleutel niet gezet
+  // is; dat is hier te ruim, dus zonder sleutel is deze route dicht.
+  app.get("/api/admin/postcodes", (req, res) => {
+    const key = String(process.env.ADMIN_API_KEY || "").trim();
+    const gegeven = String(req.header("x-api-key") || req.query?.token || "").trim();
+    if (!key || gegeven !== key) return res.status(401).json({ error: "Unauthorized" });
+    const niveau = req.query?.niveau === "pc4" ? "pc4" : "postcode";
+    const rijen = postcodeOverzicht(leesPostcodes({ vanaf: req.query?.vanaf }), { niveau });
+    if (req.query?.format === "csv") {
+      res.set("Content-Type", "text/csv; charset=utf-8");
+      res.set("Content-Disposition", `attachment; filename="postcodes_${config.id}.csv"`);
+      return res.send(alsCsv(rijen));
+    }
+    return res.json({ tenant: config.id, niveau, aantal: rijen.length, postcodes: rijen });
+  });
+
   app.get("/api/tenant", (req, res) => res.json({
     id: config.id,
     // Moet de pagina de gegevenspoort tonen? Twee dingen bij elkaar: staat hij aan voor
@@ -2545,6 +2572,9 @@ export function createTenantApp(config) {
     try {
       const address = normalizeAddressInput(req.body || {});
       if (!address.postalcode || !address.housenumber) return res.status(400).json({ error: "postalcode en housenumber zijn verplicht." });
+      // Elke ingevulde postcode, voor de conversie per postcode (lib/postcode_log.js).
+      // Voor de aanroep: ook een adres dat daarna niet gevonden wordt, is ingevuld.
+      if (postcodeLogAan()) legPostcodeVast({ postcode: address.postalcode, gebeurtenis: "opgezocht", tenant: config.id });
       const lookup = await fetchLookupFromReportApi(address);
       return res.json(lookup);
     } catch (e) { return res.status(500).json({ error: e?.message || String(e) }); }
@@ -2679,6 +2709,9 @@ export function createTenantApp(config) {
       // dagmax.
       if (gast?.soort === "gast" && teltSnel(gast)) verhoogAccountteller(dataDir, gast.email);
 
+      // Elke ingevulde postcode, voor de conversie per postcode (lib/postcode_log.js).
+      // Voor de aanroep: ook een adres dat daarna niet gevonden wordt, is ingevuld.
+      if (postcodeLogAan()) legPostcodeVast({ postcode: address.postalcode, gebeurtenis: "opgezocht", tenant: config.id });
       const lookup = await fetchLookupFromReportApi(address);
       return res.json(lookup);
     } catch (e) { return res.status(500).json({ error: e?.message || String(e) }); }
@@ -3892,7 +3925,16 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         "advies_partner",
       ]);
       const vraagtToestemming = TOESTEMMINGSBRONNEN.has(sourcePage) || ctxIn.productType === "advies_aanvraag";
-      const magMailen = !isPoort && (!vraagtToestemming || akkoord);
+      // MET DE RAPPORTVRAGEN AAN GAAT ER ALTIJD EEN MAIL (besluit Dennis, 20 november 2026).
+      //
+      // De tenant wil van elke download en aanvraag een signaal met postcode en
+      // e-mailadres, om het in zijn CRM te verwerken; zo kunnen wij matchen. Het venster
+      // zegt in die stand dan ook dat de gegevens naar het merk gaan, en dat er alleen
+      // contact komt bij ja op gesprek of offertes. Zegt de bezoeker twee keer nee, dan
+      // staat dat bovenaan de mail (zie `heading` hieronder).
+      const altijdSignaal = Boolean(wensen) && vraagtToestemming;
+      const magMailen = !isPoort && (!vraagtToestemming || akkoord || altijdSignaal);
+      const geenContactGewenst = altijdSignaal && !akkoord;
       if (!magMailen && !isPoort) {
         console.log(`[lead] niet gemaild: toestemming geweigerd (bron=${sourcePage || "-"})`);
       }
@@ -3910,6 +3952,13 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         wensen,
         ...(mailOverrides
           ? { to: mailOverrides.to, subject: mailOverrides.subject, heading: mailOverrides.heading, intro: mailOverrides.intro }
+          : {}),
+        ...(geenContactGewenst
+          ? {
+              subject: `Rapport ${sourcePage === "snel_rapport_download" ? "gedownload" : "aangevraagd"}, geen contact gewenst — ${[firstName, lastName].filter(Boolean).join(" ")}`,
+              heading: "Rapport zonder contactverzoek",
+              intro: "De bezoeker koos NEE op een gesprek en NEE op offertes. Alleen voor uw administratie en CRM; neem geen contact op.",
+            }
           : {}),
         meta: {
           ip,
@@ -3965,6 +4014,11 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
       // en toestemming in één keer -- en hoort hij daarna net zo goed zijn rapport te
       // krijgen. De cookie zegt niets meer dan: deze browser gaf dit e-mailadres.
       zetPoortCookie(res, { email, naam: [firstName, lastName].filter(Boolean).join(" ") });
+      // De download telt mee in de conversie per postcode. De aanvraag van het volledige
+      // rapport legt /api/full/aanvraag zelf vast, zodat die niet dubbel telt.
+      if (sourcePage === "snel_rapport_download" && postcodeLogAan()) {
+        legPostcodeVast({ postcode: ctxIn.address?.postalcode, gebeurtenis: "rapport_gedownload", tenant: config.id });
+      }
       return res.json({ ok: true });
     } catch (e) {
       // eslint-disable-next-line no-console

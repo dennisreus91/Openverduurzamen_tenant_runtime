@@ -327,6 +327,9 @@
       // Met de rapportvragen aan klopt "zet dan het vinkje" niet meer: dan zijn het de
       // vragen in het venster zelf. Zie lib/rapport_wensen.js.
       const metVragen = vragenAan() && (downloadModus || rapportModus);
+      // Het merk op de pagina, niet de opvolgpartner: met de vragen aan gaan de gegevens
+      // altijd naar de tenant zelf (besluit Dennis, 20 november 2026).
+      const merk = (tenantData && tenantData.brand && tenantData.brand.name) || "ons";
       if (titleEl) {
         titleEl.textContent = poortModus
           ? "Nog even uw gegevens"
@@ -340,9 +343,9 @@
       }
       if (leadEl) {
         leadEl.innerHTML = metVragen && downloadModus
-          ? "Vul uw gegevens in en laat ons weten wat u wilt, dan begint de download direct. Alleen als u hieronder kiest voor een gesprek of voor offertes, neemt " + partner + " contact met u op."
+          ? "Vul uw gegevens in en laat ons weten wat u wilt, dan begint de download direct. Uw gegevens gaan naar " + merk + "; er wordt alleen contact met u opgenomen als u hieronder kiest voor een gesprek of voor offertes."
           : metVragen
-          ? "U krijgt het volledige rapport per e-mail: de passende maatregelen, de volgorde, de kosten, de subsidies en wat het met uw woningwaarde doet. Laat hieronder ook weten wat u wilt. Alleen als u kiest voor een gesprek of voor offertes, nemen wij contact met u op."
+          ? "U krijgt het volledige rapport per e-mail: de passende maatregelen, de volgorde, de kosten, de subsidies en wat het met uw woningwaarde doet. Laat hieronder ook weten wat u wilt. Uw gegevens gaan naar " + merk + "; er wordt alleen contact met u opgenomen als u kiest voor een gesprek of voor offertes."
           : downloadModus
           ? "De download begint zo. Wilt u dat " + partner + " dit rapport met u doorneemt? Zet dan het vinkje hieronder. Zonder vinkje krijgt u het rapport net zo goed en gaan uw gegevens niet naar hen toe."
           : poortModus

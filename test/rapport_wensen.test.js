@@ -117,18 +117,33 @@ test("/api/tenant geeft de vragen alleen als de tenant ze aanzet", async (t) => 
   assert.equal(d.rapportVragen.geenVoorkeur, "Geen voorkeur");
 });
 
-test("twee keer nee: rapport gaat door, maar er gaat geen mail naar de partner", async (t) => {
+test("twee keer nee: de tenant krijgt toch een signaal, met geen contact gewenst", async (t) => {
   const oud = process.env.RESEND_API_KEY;
   delete process.env.RESEND_API_KEY;
   t.after(() => { if (oud !== undefined) process.env.RESEND_API_KEY = oud; });
+  const echteError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = echteError; });
   const aan = await tenant(t, { rapportVragen: true, gegevensPoort: "bij_download" });
-  // Een los vinkje op true telt niet meer als de vragen er zijn: de antwoorden beslissen.
   const r = await aan.post("/api/lead", {
-    ...AANVRAAG, akkoord: true, wensen: { expertGesprek: "nee", offertes: "nee", scenario: "Geen voorkeur" },
+    ...AANVRAAG, akkoord: false, wensen: { expertGesprek: "nee", offertes: "nee", scenario: "Geen voorkeur" },
   });
-  assert.equal(r.status, 200, "zonder mail hoort de route gewoon te slagen");
-  // En de poortcookie staat er, zodat het volledige rapport daarna aangevraagd kan worden.
-  assert.match((r.headers.getSetCookie?.() || []).join("; "), /=/);
+  // Zonder RESEND_API_KEY strandt het mailen: het bewijs dat er gemaild werd.
+  assert.equal(r.status, 500);
+});
+
+test("de mail bij twee keer nee zegt dat er geen contact gewenst is", () => {
+  process.env.LEAD_EMAIL = "crm@tenant.nl";
+  const mail = bouwLeadMail({
+    firstName: "Jan", lastName: "Jansen", email: "jan@voorbeeld.nl", phone: "0612345678", sourcePage: "snel_rapport_download",
+    config: CONFIG, wensen: leesRapportWensen({ expertGesprek: "nee", offertes: "nee", scenario: "Geen voorkeur" }),
+    subject: "Rapport gedownload, geen contact gewenst — Jan Jansen", heading: "Rapport zonder contactverzoek",
+  });
+  assert.match(mail.subject, /geen contact gewenst/);
+  assert.match(mail.html, /Rapport zonder contactverzoek/);
+  // Het machineleesbare blok voor de CRM-import staat er gewoon, met het e-mailadres.
+  assert.match(mail.text, /E-mail: jan@voorbeeld\.nl/);
+  delete process.env.LEAD_EMAIL;
 });
 
 test("ja op offertes: de route probeert te mailen", async (t) => {
