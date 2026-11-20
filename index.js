@@ -44,6 +44,7 @@ import {
 import { initFeedbackStore, appendFeedback, listFeedback, feedbackStats } from "./lib/feedback_store.js";
 import { centraalAan, kiesTeMelden, meldBestelling, meldLead } from "./lib/centraal.js";
 import { rapportprofiel } from "./lib/rapportprofiel.js";
+import { rapportVragenAan, rapportVragen, leesRapportWensen, toestemmingUitWensen, toestemmingsTekstUitWensen } from "./lib/rapport_wensen.js";
 import {
   getCurrentMonthUsage,
   incrementInternalQuota,
@@ -2534,6 +2535,9 @@ export function createTenantApp(config) {
     // De naam waarmee het contactvenster de adviesaanvraag aankondigt. Stond
     // hardgecodeerd in de kopie van De Energie Raadgever.
     adviesPartner: String(config.report?.adviesPartner || config.brand?.name || "").trim(),
+    // De vragen bij de download en de aanvraag (lib/rapport_wensen.js), of false. Het
+    // venster zet ze neer in plaats van het losse toestemmingsvinkje.
+    rapportVragen: rapportVragenAan(config) ? rapportVragen(config) : false,
     product: { name: config.product?.name || "", priceEur: Number(config.payment?.priceEur || 30) },
   }));
 
@@ -3582,6 +3586,11 @@ export function createTenantApp(config) {
       const phone     = String(body.phone     || "").trim().slice(0, 40);
       const message   = String(body.message   || "").slice(0, 2000);
       const sourcePage = String(body.sourcePage || "").trim().slice(0, 60);
+      // De antwoorden op de vragen bij download en aanvraag (features.rapportVragen). Met
+      // die vragen aan is er geen los vinkje meer: ja op het expertgesprek of op offertes
+      // IS de vraag om contact. Zie lib/rapport_wensen.js.
+      const wensen = rapportVragenAan(config) ? leesRapportWensen(body.wensen) : null;
+      const akkoord = wensen ? toestemmingUitWensen(wensen) : body.akkoord === true;
 
       const errors = [];
       if (!firstName) errors.push("Voornaam is verplicht.");
@@ -3685,7 +3694,7 @@ export function createTenantApp(config) {
         mailOverrides = adviesAanvraagMail({
           config, firstName, lastName, adres: addr,
           soort: String(ctxIn.soort || "").trim() || "advies",
-          akkoord: body.akkoord === true,
+          akkoord,
         });
         {
           const rows = [];
@@ -3883,7 +3892,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         "advies_partner",
       ]);
       const vraagtToestemming = TOESTEMMINGSBRONNEN.has(sourcePage) || ctxIn.productType === "advies_aanvraag";
-      const magMailen = !isPoort && (!vraagtToestemming || body.akkoord === true);
+      const magMailen = !isPoort && (!vraagtToestemming || akkoord);
       if (!magMailen && !isPoort) {
         console.log(`[lead] niet gemaild: toestemming geweigerd (bron=${sourcePage || "-"})`);
       }
@@ -3898,6 +3907,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         config,
         reportContext,
         attachments,
+        wensen,
         ...(mailOverrides
           ? { to: mailOverrides.to, subject: mailOverrides.subject, heading: mailOverrides.heading, intro: mailOverrides.intro }
           : {}),
@@ -3925,8 +3935,11 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
           // misleidender zijn dan geen veld; een veld dat soms gevuld is, is gewoon waar.
           ...(leadAdres ? { adres: leadAdres } : {}),
           mailStatus: isPoort ? "niet_verstuurd" : "verstuurd",
-          toestemming: body.akkoord === true,
-          toestemmingTekst: toestemming.tekst,
+          toestemming: akkoord,
+          // Met de vragen aan is de toestemming gegeven op de tekst van die vragen, niet op
+          // de vinkjestekst -- die stond dan niet in beeld.
+          toestemmingTekst: wensen ? toestemmingsTekstUitWensen(wensen, config) : toestemming.tekst,
+          ...(wensen ? { wensen } : {}),
         },
         config,
       )
