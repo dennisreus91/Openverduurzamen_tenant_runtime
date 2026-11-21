@@ -783,8 +783,12 @@
         });
         const json = await res.json().catch(function () { return null; });
         if (!res.ok || !json || json.ok !== true) {
-          const detail = json?.error || ("HTTP " + res.status);
-          throw new Error(detail);
+          // De server geeft zelf een Nederlandse melding (validatie, te veel
+          // aanvragen); zonder die melding blijft het een algemene zin, nooit
+          // een statuscode.
+          const fout = new Error(json?.error || "");
+          fout.vanServer = Boolean(json?.error);
+          throw fout;
         }
         // Success. De gegevens blijven in dit tabblad staan, zodat de toestemmingsvraag bij
         // het rapport ze niet opnieuw hoeft te stellen. Zie de kop van dit bestand.
@@ -820,8 +824,13 @@
           // Het terugvaladres stond hier per tenant hardgecodeerd; nu komt het uit
           // /api/tenant, zodat dit bestand voor iedereen hetzelfde kan zijn.
           var tenantMail = (tenantData && tenantData.contact && tenantData.contact.email) || "";
-          errorBox.textContent = "Versturen mislukt: " + (err?.message || "onbekende fout") +
-            (tenantMail ? ". Probeer het later opnieuw of mail rechtstreeks naar " + tenantMail + "." : ". Probeer het later opnieuw.");
+          // Een netwerkfout ("Failed to fetch", "Load failed") is technisch en
+          // in het Engels; die zetten we om naar een gewone zin.
+          var reden = err && err.vanServer
+            ? String(err.message).trim().replace(/([^.!?])$/, "$1.")
+            : (err instanceof TypeError ? "Er is geen verbinding. Probeer het later opnieuw." : "Probeer het later opnieuw.");
+          errorBox.textContent = "Versturen mislukt. " + reden +
+            (tenantMail ? " U kunt ook rechtstreeks mailen naar " + tenantMail + "." : "");
           errorBox.removeAttribute("hidden");
         }
       } finally {
