@@ -411,6 +411,8 @@
      * labelsprong en dezelfde kop ("C → A", "Voor de laagste investering naar A"), dus
      * die alleen zeggen de bezoeker niets. Daarom: "Scenario 1 – C → A: spouwmuur
      * isoleren + glas vervangen (€ 4.000 netto)", uit de zichtbare tekst van de kaart.
+     * Live gezien (21-11): zonder subsidie heet het blok "INVESTERING", en onder de
+     * maatregelen staat altijd een ISDE-regel die geen maatregel is.
      */
     function scenarioTekst(kaart) {
       const regels = String(kaart.innerText || kaart.textContent || "")
@@ -418,21 +420,27 @@
       if (!regels.length) return "";
       const naam = regels[0];
       const sprong = regels.find(function (s) { return /^[A-G][+]*\s*→\s*[A-G][+]*$/.test(s); }) || "";
-      const iInv = regels.findIndex(function (s) { return /^netto investering$/i.test(s); });
+      // "NETTO INVESTERING" als er subsidie af gaat, anders alleen "INVESTERING".
+      const iInv = regels.findIndex(function (s) { return /^(netto )?investering$/i.test(s); });
+      const netto = iInv >= 0 && /netto/i.test(regels[iInv]);
       const investering = iInv >= 0 && /€/.test(regels[iInv + 1] || "") ? regels[iInv + 1] : "";
       const iMaat = regels.findIndex(function (s) { return /^maatregelen$/i.test(s); });
       const maatregelen = [];
       if (iMaat >= 0) {
         for (let i = iMaat + 1; i < regels.length && maatregelen.length < 3; i++) {
-          if (/^(ISDE|Subsidie)\b/i.test(regels[i]) || /^[A-Z ]{6,}$/.test(regels[i])) break;
-          const kort = regels[i].split(" — ")[0].split(/ (van|op|door|naar) /)[0].replace(/^ca\. \d+ /i, "").trim();
+          // Onder de maatregelen staat een regel over de subsidie ("ISDE: indicatief ...",
+          // "Geen ISDE voor dit pakket ..."): daar houdt de lijst op.
+          if (/\bISDE\b|subsidie|regeling/i.test(regels[i]) || /^[A-Z ]{6,}$/.test(regels[i])) break;
+          // "Ca. 20 zonnepanelen op ..." -> "ca. 20 zonnepanelen": het aantal houdt twee
+          // scenario's met alleen zonnepanelen uit elkaar.
+          const kort = regels[i].split(" — ")[0].split(/ (van|op|door|naar) /)[0].trim();
           if (kort) maatregelen.push(kort.charAt(0).toLowerCase() + kort.slice(1));
         }
       }
       let tekst = naam;
       if (sprong && sprong !== naam) tekst += " – " + sprong;
       if (maatregelen.length) tekst += ": " + maatregelen.join(" + ");
-      if (investering) tekst += " (" + investering + " netto)";
+      if (investering) tekst += " (" + investering + (netto ? " netto)" : ")");
       return tekst.slice(0, 200);
     }
 
@@ -775,8 +783,12 @@
         });
         const json = await res.json().catch(function () { return null; });
         if (!res.ok || !json || json.ok !== true) {
-          const detail = json?.error || ("HTTP " + res.status);
-          throw new Error(detail);
+          // De server geeft zelf een Nederlandse melding (validatie, te veel
+          // aanvragen); zonder die melding blijft het een algemene zin, nooit
+          // een statuscode.
+          const fout = new Error(json?.error || "");
+          fout.vanServer = Boolean(json?.error);
+          throw fout;
         }
         // Success. De gegevens blijven in dit tabblad staan, zodat de toestemmingsvraag bij
         // het rapport ze niet opnieuw hoeft te stellen. Zie de kop van dit bestand.
@@ -812,8 +824,13 @@
           // Het terugvaladres stond hier per tenant hardgecodeerd; nu komt het uit
           // /api/tenant, zodat dit bestand voor iedereen hetzelfde kan zijn.
           var tenantMail = (tenantData && tenantData.contact && tenantData.contact.email) || "";
-          errorBox.textContent = "Versturen mislukt: " + (err?.message || "onbekende fout") +
-            (tenantMail ? ". Probeer het later opnieuw of mail rechtstreeks naar " + tenantMail + "." : ". Probeer het later opnieuw.");
+          // Een netwerkfout ("Failed to fetch", "Load failed") is technisch en
+          // in het Engels; die zetten we om naar een gewone zin.
+          var reden = err && err.vanServer
+            ? String(err.message).trim().replace(/([^.!?])$/, "$1.")
+            : (err instanceof TypeError ? "Er is geen verbinding. Probeer het later opnieuw." : "Probeer het later opnieuw.");
+          errorBox.textContent = "Versturen mislukt. " + reden +
+            (tenantMail ? " U kunt ook rechtstreeks mailen naar " + tenantMail + "." : "");
           errorBox.removeAttribute("hidden");
         }
       } finally {
