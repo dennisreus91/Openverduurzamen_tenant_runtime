@@ -94,6 +94,13 @@
     const message = $(modal, "[name='message']");
     const counter = $(modal, "[data-contact-counter]");
     const firstField = $(modal, "[name='firstName']");
+    // Voor de rapportvragen (zie "DE RAPPORTVRAGEN" verderop). Hier bovenaan, zodat
+    // zetStand() ze ook kan lezen als init() eerder stopt.
+    let vragenBlok = null;
+    const berichtLabel = message ? message.closest("label")?.querySelector("span") : null;
+    const berichtLabelTekst = berichtLabel && berichtLabel.firstChild && berichtLabel.firstChild.nodeType === 3
+      ? berichtLabel.firstChild.nodeValue
+      : null;
 
     let lastFocused = null;
 
@@ -114,7 +121,7 @@
       // Remember the opener so close() can hand focus back (a11y).
       lastFocused = document.activeElement;
       // Restore form visibility — a prior successful submit hides these.
-      $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, .contactModal__lead, [data-contact-akkoord-rij]").forEach(function (el) {
+      $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, .contactModal__lead, [data-contact-akkoord-rij], [data-rapport-vragen]").forEach(function (el) {
         el.style.display = "";
       });
       successBox?.setAttribute("hidden", "");
@@ -155,7 +162,11 @@
 
       // Stand 1: geen toestemmingsvraag, en geen opmerkingenveld -- de bezoeker heeft nog
       // niets om op te merken; hij wil de tool gebruiken.
-      if (akkoordRij) akkoordRij.style.display = poort ? "none" : "";
+      //
+      // Met de rapportvragen aan (zie zetVragen) vervangen die vragen het vinkje: ja op
+      // het expertgesprek of op offertes IS de vraag om contact.
+      const vragen = zetVragen(source);
+      if (akkoordRij) akkoordRij.style.display = poort || vragen ? "none" : "";
       const bericht = $(modal, "[name='message']");
       if (bericht) {
         const rij = rijVan(bericht);
@@ -313,11 +324,17 @@
       // gezien op de publieke tenant, 29 oktober 2026.
       poortModus = source === POORT_BRON;
       const partner = (tenantData && tenantData.adviesPartner) || "onze partner";
+      // Met de rapportvragen aan klopt "zet dan het vinkje" niet meer: dan zijn het de
+      // vragen in het venster zelf. Zie lib/rapport_wensen.js.
+      const metVragen = vragenAan() && (downloadModus || rapportModus);
+      // Het merk op de pagina, niet de opvolgpartner: met de vragen aan gaan de gegevens
+      // altijd naar de tenant zelf (besluit Dennis, 20 november 2026).
+      const merk = (tenantData && tenantData.brand && tenantData.brand.name) || "ons";
       if (titleEl) {
         titleEl.textContent = poortModus
           ? "Nog even uw gegevens"
           : downloadModus
-            ? "Uw rapport staat klaar"
+            ? (metVragen ? "Uw rapport downloaden" : "Uw rapport staat klaar")
           : adviesModus
             ? "Vrijblijvend advies van " + partner
             : rapportModus
@@ -325,7 +342,11 @@
               : origineel.title;
       }
       if (leadEl) {
-        leadEl.innerHTML = downloadModus
+        leadEl.innerHTML = metVragen && downloadModus
+          ? "Vul uw gegevens in en laat ons weten wat u wilt, dan begint de download direct. Uw gegevens gaan naar " + merk + "; er wordt alleen contact met u opgenomen als u hieronder kiest voor een gesprek of voor offertes."
+          : metVragen
+          ? "U krijgt het volledige rapport per e-mail: de passende maatregelen, de volgorde, de kosten, de subsidies en wat het met uw woningwaarde doet. Laat hieronder ook weten wat u wilt. Uw gegevens gaan naar " + merk + "; er wordt alleen contact met u opgenomen als u kiest voor een gesprek of voor offertes."
+          : downloadModus
           ? "De download begint zo. Wilt u dat " + partner + " dit rapport met u doorneemt? Zet dan het vinkje hieronder. Zonder vinkje krijgt u het rapport net zo goed en gaan uw gegevens niet naar hen toe."
           : poortModus
           // Zegt wat er gebeurt en wat er NIET gebeurt. Dat tweede is hier het punt: wie
@@ -368,6 +389,185 @@
       }
     }
 
+    // DE RAPPORTVRAGEN (feedback WoonWijzerWinkel, 20 november 2026).
+    //
+    // Bij de download van het snelle rapport en de aanvraag van het volledige: wil de
+    // bezoeker het rapport doornemen met een expert, wil hij direct offertes, en welk
+    // scenario heeft zijn voorkeur ("geen voorkeur" mag). Het opmerkingenveld blijft en
+    // heet dan "Aanvullende vragen of opmerkingen".
+    //
+    // Alleen als de tenant `features.rapportVragen` aanzet; de teksten komen dan uit
+    // /api/tenant (lib/rapport_wensen.js), zodat venster en leadmail dezelfde vraag noemen.
+
+    function vragenAan() {
+      return Boolean(tenantData && tenantData.rapportVragen && typeof tenantData.rapportVragen === "object");
+    }
+    function vragenBron(source) {
+      return source === "snel_rapport_download" || source === "volledig_rapport" || source === "mid_report_full_cta";
+    }
+
+    /**
+     * De scenario's zoals ze in het rapport op dit scherm staan. Een pagina mag ze zelf
+     * aanleveren via window.__scenarioKeuzes(); anders lezen we ze uit het rapport: de
+     * kaartweergave (.mid-kaart) of, bij de tabel, de mobiele kaarten die altijd in de
+     * HTML staan (.mid-mobile-card). Per kaart: het label ("Naar label A") en de naam.
+     */
+    function scenarioKeuzes() {
+      try {
+        if (typeof window.__scenarioKeuzes === "function") {
+          const eigen = window.__scenarioKeuzes();
+          if (Array.isArray(eigen) && eigen.length) return eigen.map(String).filter(Boolean);
+        }
+      } catch (_) {}
+      const uit = [];
+      let kaarten = $$(document, ".mid-report .mid-kaart");
+      if (!kaarten.length) kaarten = $$(document, ".mid-report .mid-mobile-card");
+      kaarten.forEach(function (kaart) {
+        const badge = (kaart.querySelector("span")?.textContent || "").replace(/\s+/g, " ").trim();
+        const naamEl = $$(kaart, "div").find(function (d) {
+          return /font-weight:\s*700/.test(d.getAttribute("style") || "") && !d.querySelector("div, span");
+        });
+        const naam = (naamEl?.textContent || "").replace(/\s+/g, " ").trim();
+        const tekst = badge && naam && naam !== badge ? badge + " – " + naam : (badge || naam);
+        if (tekst && !uit.includes(tekst)) uit.push(tekst);
+      });
+      return uit;
+    }
+
+    function maakVragenBlok() {
+      if (vragenBlok || !form) return vragenBlok;
+      const v = tenantData.rapportVragen;
+      vragenBlok = document.createElement("div");
+      vragenBlok.setAttribute("data-rapport-vragen", "");
+      vragenBlok.style.cssText = "margin:.75rem 0;display:flex;flex-direction:column;gap:.85rem;";
+      function jaNeeVraag(naam, tekst) {
+        const groep = document.createElement("fieldset");
+        groep.style.cssText = "border:0;margin:0;padding:0;min-width:0;";
+        const legend = document.createElement("legend");
+        legend.style.cssText = "font-size:.9rem;font-weight:600;line-height:1.4;margin:0 0 .35rem;padding:0;";
+        legend.textContent = tekst + " ";
+        const ster = document.createElement("span");
+        ster.className = "contactModal__req";
+        ster.setAttribute("aria-hidden", "true");
+        ster.textContent = "*";
+        legend.appendChild(ster);
+        groep.appendChild(legend);
+        const rij = document.createElement("div");
+        rij.style.cssText = "display:flex;gap:1.25rem;flex-wrap:wrap;";
+        [["ja", "Ja"], ["nee", "Nee"]].forEach(function (paar) {
+          const l = document.createElement("label");
+          l.style.cssText = "display:inline-flex;align-items:center;gap:.4rem;font-size:.9rem;cursor:pointer;";
+          const r = document.createElement("input");
+          r.type = "radio";
+          r.name = naam;
+          r.value = paar[0];
+          // Zelfde reden als bij het toestemmingsvinkje: tenant-CSS zet input op 100%.
+          r.style.cssText = "width:18px;height:18px;margin:0;flex:0 0 auto;";
+          l.appendChild(r);
+          l.appendChild(document.createTextNode(paar[1]));
+          rij.appendChild(l);
+        });
+        groep.appendChild(rij);
+        return groep;
+      }
+      vragenBlok.appendChild(jaNeeVraag("wensExpert", v.expertGesprek));
+      vragenBlok.appendChild(jaNeeVraag("wensOffertes", v.offertes));
+
+      const keuze = document.createElement("label");
+      keuze.style.cssText = "display:flex;flex-direction:column;gap:.35rem;";
+      const kop = document.createElement("span");
+      kop.style.cssText = "font-size:.9rem;font-weight:600;line-height:1.4;";
+      kop.textContent = v.scenario + " ";
+      const ster = document.createElement("span");
+      ster.className = "contactModal__req";
+      ster.setAttribute("aria-hidden", "true");
+      ster.textContent = "*";
+      kop.appendChild(ster);
+      const select = document.createElement("select");
+      select.name = "wensScenario";
+      keuze.appendChild(kop);
+      keuze.appendChild(select);
+      vragenBlok.appendChild(keuze);
+
+      // De privacyverklaring stond bij het toestemmingsvinkje, en dat staat hier niet in
+      // beeld. Wie gevraagd wordt om contact moet kunnen lezen wat er met zijn gegevens
+      // gebeurt.
+      const privacyUrl = tenantData.lead && tenantData.lead.privacyUrl;
+      if (privacyUrl) {
+        const regel = document.createElement("p");
+        regel.style.cssText = "margin:0;font-size:.8rem;line-height:1.4;opacity:.8;";
+        regel.textContent = "Wij gaan zorgvuldig met uw gegevens om, zie de ";
+        const a = document.createElement("a");
+        a.href = privacyUrl;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = "privacyverklaring";
+        regel.appendChild(a);
+        regel.appendChild(document.createTextNode("."));
+        vragenBlok.appendChild(regel);
+      }
+
+      // Boven het opmerkingenveld: eerst de vragen, dan de ruimte voor wat er nog over is.
+      const berichtRij = message ? message.closest("label") : null;
+      if (berichtRij && berichtRij.parentNode) berichtRij.parentNode.insertBefore(vragenBlok, berichtRij);
+      else {
+        const acties = submitBtn ? submitBtn.closest(".contactModal__actions") : null;
+        if (acties && acties.parentNode) acties.parentNode.insertBefore(vragenBlok, acties);
+        else form.appendChild(vragenBlok);
+      }
+      return vragenBlok;
+    }
+
+    /** De scenariolijst opnieuw vullen: het rapport kan sinds de vorige keer veranderd zijn. */
+    function vulScenarios() {
+      const select = vragenBlok?.querySelector("[name='wensScenario']");
+      if (!select) return;
+      const vorige = select.value;
+      const opties = scenarioKeuzes();
+      select.innerHTML = "";
+      const leeg = document.createElement("option");
+      leeg.value = "";
+      leeg.textContent = "Maak een keuze";
+      select.appendChild(leeg);
+      opties.concat([tenantData.rapportVragen.geenVoorkeur || "Geen voorkeur"]).forEach(function (t) {
+        const o = document.createElement("option");
+        o.value = t;
+        o.textContent = t;
+        select.appendChild(o);
+      });
+      if (vorige && Array.from(select.options).some(function (o) { return o.value === vorige; })) select.value = vorige;
+    }
+
+    /** Zet de vragen aan of uit voor deze bron. Geeft terug of ze in beeld staan. */
+    function zetVragen(source) {
+      const aan = vragenAan() && vragenBron(source);
+      if (aan) {
+        maakVragenBlok();
+        vulScenarios();
+      }
+      if (vragenBlok) vragenBlok.style.display = aan ? "flex" : "none";
+      if (berichtLabel && berichtLabelTekst !== null) {
+        berichtLabel.firstChild.nodeValue = aan
+          ? (tenantData.rapportVragen.opmerkingen || "Aanvullende vragen of opmerkingen") + " "
+          : berichtLabelTekst;
+      }
+      return aan;
+    }
+
+    /** De antwoorden, of null als de vragen niet in beeld staan. */
+    function leesWensen() {
+      if (!vragenBlok || vragenBlok.style.display === "none") return null;
+      const gekozen = function (naam) {
+        const r = vragenBlok.querySelector("input[name='" + naam + "']:checked");
+        return r ? r.value : "";
+      };
+      return {
+        expertGesprek: gekozen("wensExpert"),
+        offertes: gekozen("wensOffertes"),
+        scenario: vragenBlok.querySelector("[name='wensScenario']")?.value || "",
+      };
+    }
+
     // Toestemmingsvinkje voor de lead.
     //
     // De tekst komt van de runtime (/api/tenant), met de partnernaam er al in
@@ -384,9 +584,12 @@
         const tenant = await haalTenant();
         // De naam van de partner komt uit diezelfde gegevens. Stond het venster al
         // open voordat ze binnen waren, dan stond er "onze partner"; nu niet meer.
-        if (adviesModus) pasTekstenAan(huidigeBron);
+        if (adviesModus || (vragenAan() && vragenBron(huidigeBron))) pasTekstenAan(huidigeBron);
         const tekst = tenant && tenant.lead && tenant.lead.tekst;
-        if (!tekst || form.querySelector("[data-contact-akkoord]")) return;
+        if (!tekst || form.querySelector("[data-contact-akkoord]")) {
+          if (modal.classList.contains("is-open")) zetStand(huidigeBron);
+          return;
+        }
 
         const rij = document.createElement("label");
         rij.setAttribute("data-contact-akkoord-rij", "");
@@ -491,6 +694,15 @@
         akkoord: akkoordVak ? akkoordVak.checked === true : false,
       };
 
+      // Met de rapportvragen in beeld zijn de antwoorden de toestemming: ja op het
+      // expertgesprek of op offertes is de vraag om contact. De runtime rekent dat zelf
+      // ook zo uit; dit is voor de pagina, die `akkoord` doorgeeft aan de aanvraag.
+      const wensen = leesWensen();
+      if (wensen) {
+        data.wensen = wensen;
+        data.akkoord = wensen.expertGesprek === "ja" || wensen.offertes === "ja";
+      }
+
       // DE POORT MELDT ZICHZELF.
       //
       // De runtime leest `context.productType` en mailt de poortaanvraag daarom niet. Dat
@@ -506,6 +718,11 @@
       if (!data.lastName)  missing.push("Achternaam");
       if (!data.email || !/^\S+@\S+\.\S+$/.test(data.email)) missing.push("E-mailadres");
       if (!data.phone || data.phone.replace(/\D/g, "").length < 6) missing.push("Telefoonnummer");
+      if (wensen) {
+        if (!wensen.expertGesprek) missing.push("gesprek met een expert (ja of nee)");
+        if (!wensen.offertes) missing.push("offertes (ja of nee)");
+        if (!wensen.scenario) missing.push("voorkeursscenario");
+      }
       if (missing.length) {
         if (errorBox) {
           errorBox.textContent = "Controleer de volgende velden: " + missing.join(", ") + ".";
@@ -548,7 +765,7 @@
         // het laatste stukje van deze lijst bleef na het versturen een
         // aanvinkbaar vakje onder de bedankregel staan -- een keuze die niets
         // meer doet, bij een aanvraag die al verstuurd is.
-        $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, [data-contact-akkoord-rij]").forEach(function (el) {
+        $$(modal, ".contactModal__sectionLabel, .contactModal__grid, .contactModal__field, .contactModal__actions, [data-contact-akkoord-rij], [data-rapport-vragen]").forEach(function (el) {
           el.style.display = "none";
         });
         // Also collapse the lead paragraph so the modal feels resolved.
