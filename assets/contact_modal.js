@@ -407,6 +407,36 @@
     }
 
     /**
+     * Een herkenbare naam voor een scenariokaart. De drie kaarten hebben vaak dezelfde
+     * labelsprong en dezelfde kop ("C → A", "Voor de laagste investering naar A"), dus
+     * die alleen zeggen de bezoeker niets. Daarom: "Scenario 1 – C → A: spouwmuur
+     * isoleren + glas vervangen (€ 4.000 netto)", uit de zichtbare tekst van de kaart.
+     */
+    function scenarioTekst(kaart) {
+      const regels = String(kaart.innerText || kaart.textContent || "")
+        .split("\n").map(function (s) { return s.replace(/\s+/g, " ").trim(); }).filter(Boolean);
+      if (!regels.length) return "";
+      const naam = regels[0];
+      const sprong = regels.find(function (s) { return /^[A-G][+]*\s*→\s*[A-G][+]*$/.test(s); }) || "";
+      const iInv = regels.findIndex(function (s) { return /^netto investering$/i.test(s); });
+      const investering = iInv >= 0 && /€/.test(regels[iInv + 1] || "") ? regels[iInv + 1] : "";
+      const iMaat = regels.findIndex(function (s) { return /^maatregelen$/i.test(s); });
+      const maatregelen = [];
+      if (iMaat >= 0) {
+        for (let i = iMaat + 1; i < regels.length && maatregelen.length < 3; i++) {
+          if (/^(ISDE|Subsidie)\b/i.test(regels[i]) || /^[A-Z ]{6,}$/.test(regels[i])) break;
+          const kort = regels[i].split(" — ")[0].split(/ (van|op|door|naar) /)[0].replace(/^ca\. \d+ /i, "").trim();
+          if (kort) maatregelen.push(kort.charAt(0).toLowerCase() + kort.slice(1));
+        }
+      }
+      let tekst = naam;
+      if (sprong && sprong !== naam) tekst += " – " + sprong;
+      if (maatregelen.length) tekst += ": " + maatregelen.join(" + ");
+      if (investering) tekst += " (" + investering + " netto)";
+      return tekst.slice(0, 200);
+    }
+
+    /**
      * De scenario's zoals ze in het rapport op dit scherm staan. Een pagina mag ze zelf
      * aanleveren via window.__scenarioKeuzes(); anders lezen we ze uit het rapport: de
      * kaartweergave (.mid-kaart) of, bij de tabel, de mobiele kaarten die altijd in de
@@ -423,12 +453,7 @@
       let kaarten = $$(document, ".mid-report .mid-kaart");
       if (!kaarten.length) kaarten = $$(document, ".mid-report .mid-mobile-card");
       kaarten.forEach(function (kaart) {
-        const badge = (kaart.querySelector("span")?.textContent || "").replace(/\s+/g, " ").trim();
-        const naamEl = $$(kaart, "div").find(function (d) {
-          return /font-weight:\s*700/.test(d.getAttribute("style") || "") && !d.querySelector("div, span");
-        });
-        const naam = (naamEl?.textContent || "").replace(/\s+/g, " ").trim();
-        const tekst = badge && naam && naam !== badge ? badge + " – " + naam : (badge || naam);
+        const tekst = scenarioTekst(kaart);
         if (tekst && !uit.includes(tekst)) uit.push(tekst);
       });
       return uit;
