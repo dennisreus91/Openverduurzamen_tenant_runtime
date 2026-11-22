@@ -105,7 +105,9 @@
     "html.ov-kiosk button,html.ov-kiosk .btn,html.ov-kiosk select," +
     "html.ov-kiosk input:not([type=radio]):not([type=checkbox]):not([type=hidden]){min-height:56px;font-size:18px}" +
     "html.ov-kiosk input[type=radio],html.ov-kiosk input[type=checkbox]{width:26px!important;height:26px!important;margin-top:0!important}" +
-    "html.ov-kiosk label{min-height:44px}" +
+    // Alleen een label om een keuzerondje of vinkje: een veldlabel boven een
+    // invoerveld zou anders los van zijn veld komen te staan.
+    "html.ov-kiosk label:has(> input[type=radio]),html.ov-kiosk label:has(> input[type=checkbox]){min-height:44px}" +
     "html.ov-kiosk .mid-maatregel-link{display:inline-block;padding:8px 0;font-weight:600}" +
     "html.ov-kiosk [data-action=rapport-downloaden]{display:none!important}" +
     ".ov-kiosk-venster{position:fixed;inset:0;z-index:2147483000;background:#fff;display:flex;flex-direction:column}" +
