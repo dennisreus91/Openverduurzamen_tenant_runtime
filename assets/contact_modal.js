@@ -715,6 +715,8 @@
         phone:     (form.phone?.value     || "").trim(),
         message:   (form.message?.value   || "").trim(),
         sourcePage: (form.sourcePage?.value || ""),
+        // Website of digitale zuil in de winkel (assets/kiosk.js).
+        kanaal: (window.OVKiosk && typeof window.OVKiosk.kanaal === "function") ? window.OVKiosk.kanaal() : "website",
         // Honeypot — real users should leave this empty. Bots fill all fields.
         website:   (form.website?.value   || ""),
         // Optional report context. Each page populates window.__leadContext

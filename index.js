@@ -2583,6 +2583,10 @@ export function createTenantApp(config) {
     // De vragen bij de download en de aanvraag (lib/rapport_wensen.js), of false. Het
     // venster zet ze neer in plaats van het losse toestemmingsvinkje.
     rapportVragen: rapportVragenAan(config) ? rapportVragen(config) : false,
+    // De vraag naar een specifieke maatregel (assets/maatregelkeuze.js). Aan met
+    // report.maatregelKeuze; de rekenregel zelf zit in de report-api
+    // (lib/voorkeursmaatregel.js), die dezelfde vlag via het rapportprofiel krijgt.
+    maatregelKeuze: config.report?.maatregelKeuze === true,
     product: { name: config.product?.name || "", priceEur: Number(config.payment?.priceEur || 30) },
   }));
 
@@ -3637,6 +3641,8 @@ export function createTenantApp(config) {
       const phone     = String(body.phone     || "").trim().slice(0, 40);
       const message   = String(body.message   || "").slice(0, 2000);
       const sourcePage = String(body.sourcePage || "").trim().slice(0, 60);
+      // Website of digitale zuil (assets/kiosk.js); alleen "kiosk" telt.
+      const kanaal = String(body.kanaal || "").trim().toLowerCase() === "kiosk" ? "kiosk" : "website";
       // De antwoorden op de vragen bij download en aanvraag (features.rapportVragen). Met
       // die vragen aan is er geen los vinkje meer: ja op het expertgesprek of op offertes
       // IS de vraag om contact. Zie lib/rapport_wensen.js.
@@ -3680,6 +3686,7 @@ export function createTenantApp(config) {
         energy_label: { "a++++":"A++++","a+++":"A+++","a++":"A++","a+":"A+","a":"A","b":"B","c":"C","d":"D","e":"E","f":"F","g":"G","unknown":"Onbekend" },
         ventilation_type: { natuurlijk:"Natuurlijk", mechanisch:"Mechanisch", unknown:"Onbekend" },
         heating_supply: { cv_ketel:"CV-ketel", warmtepomp:"Warmtepomp", pelletkachel:"Pelletkachel", warmtenet:"Warmtenet", unknown:"Onbekend" },
+        voorkeursmaatregel: { warmtepomp:"Warmtepomp", zonnepanelen:"Zonnepanelen", dakisolatie:"Dakisolatie", gevelisolatie:"Gevel- of spouwmuurisolatie", vloerisolatie:"Vloerisolatie", hr_glas:"HR++- of triple glas", geen:"Geen specifieke maatregel" },
         heat_distribution: { radiatoren_convectoren:"Radiatoren/convectoren", elektrische_radiatoren_convectoren:"Elektrische radiatoren/convectoren", vloerverwarming_water:"Vloerverwarming (water)", vloerverwarming_elektrisch:"Vloerverwarming (elektrisch)", infraroodpanelen:"Infrarood panelen", unknown:"Onbekend" },
         existing_measures: { vloerisolatie:"Vloerisolatie", muurisolatie:"Muurisolatie", dakisolatie:"Dakisolatie", glasisolatie:"Glasisolatie", zonnepanelen:"Zonnepanelen", thuisbatterij:"Thuisbatterij", warmtepomp:"Warmtepomp", zonneboiler:"Zonneboiler", elektrische_tapwaterverwarming:"Elektrische tapwaterverwarming" },
         glas_type: { enkel:"Enkel glas", dubbel:"Dubbel glas (vóór ~2000)", hr_plus_plus:"HR++ of nieuwer", drievoudig:"Drievoudig glas" },
@@ -3688,6 +3695,9 @@ export function createTenantApp(config) {
         soort_woning: "Soort woning", build_year: "Bouwjaar", floor_area_m2: "Woonoppervlakte (m²)", energy_label: "Huidig energielabel",
         ventilation_type: "Ventilatie", heating_supply: "Warmtevoorziening", heat_distribution: "Warmtesysteem", existing_measures: "Reeds aanwezig",
         glas_type: "Soort glas",
+        // De maatregel waar de klant voor komt (assets/maatregelkeuze.js): voor de
+        // partner het eerste waar hij op belt.
+        voorkeursmaatregel: "Interesse in maatregel",
       };
       function humanizeConfirmed(cd) {
         if (!cd || typeof cd !== "object") return [];
@@ -3964,6 +3974,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         adres: leadAdres,
         message,
         sourcePage,
+        kanaal,
         config,
         reportContext,
         attachments,
