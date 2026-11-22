@@ -3641,6 +3641,8 @@ export function createTenantApp(config) {
       const phone     = String(body.phone     || "").trim().slice(0, 40);
       const message   = String(body.message   || "").slice(0, 2000);
       const sourcePage = String(body.sourcePage || "").trim().slice(0, 60);
+      // Website of digitale zuil (assets/kiosk.js); alleen "kiosk" telt.
+      const kanaal = String(body.kanaal || "").trim().toLowerCase() === "kiosk" ? "kiosk" : "website";
       // De antwoorden op de vragen bij download en aanvraag (features.rapportVragen). Met
       // die vragen aan is er geen los vinkje meer: ja op het expertgesprek of op offertes
       // IS de vraag om contact. Zie lib/rapport_wensen.js.
@@ -3972,6 +3974,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
         adres: leadAdres,
         message,
         sourcePage,
+        kanaal,
         config,
         reportContext,
         attachments,
