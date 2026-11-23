@@ -35,6 +35,10 @@
  * 6. Aanraking melden aan de zuil ({ event: "kiosk-pause-timer" }, het bericht
  *    dat de zuil al kent van de woningscan), zodat hij niet midden in het
  *    advies naar het beginscherm springt.
+ * 7. Alleen de route via het adres (Dennis, 23 november 2026). Het energielabel
+ *    uploaden vraagt een pdf van mijnoverheid.nl, met DigiD; dat kan niet op de
+ *    zuil. Het uploadvak, het "of" ertussen en de optienummers verdwijnen, en
+ *    de intro noemt de upload niet meer. Op de website blijft alles staan.
  *
  * Voor de app: window.OVKiosk.kanaal() geeft "kiosk" of "website".
  */
@@ -110,6 +114,10 @@
     "html.ov-kiosk label:has(> input[type=radio]),html.ov-kiosk label:has(> input[type=checkbox]){min-height:44px}" +
     "html.ov-kiosk .mid-maatregel-link{display:inline-block;padding:8px 0;font-weight:600}" +
     "html.ov-kiosk [data-action=rapport-downloaden]{display:none!important}" +
+    // 7. Geen label-upload (DigiD): alleen het adres. Met !important, want de
+    // app zet het uploadvak zelf aan (hidden = false) als de tenant het heeft.
+    "html.ov-kiosk [data-pdf-upload],html.ov-kiosk .intakeUpload,html.ov-kiosk .intakeOfScheiding," +
+    "html.ov-kiosk .intakeOptie__merk{display:none!important}" +
     ".ov-kiosk-venster{position:fixed;inset:0;z-index:2147483000;background:#fff;display:flex;flex-direction:column}" +
     ".ov-kiosk-venster__balk{flex:none;display:flex;align-items:center;gap:12px;padding:12px 16px;background:#1f2a24;color:#fff}" +
     ".ov-kiosk-venster__terug{min-height:64px;padding:0 28px;font-size:20px;font-weight:700;border:0;border-radius:12px;" +
@@ -126,6 +134,24 @@
     (document.head || document.documentElement).appendChild(st);
   }
   zetStijl();
+
+  // ---- 7. Intro zonder de upload --------------------------------------------
+  function introZonderUpload() {
+    var els = document.querySelectorAll(".intakeKop__uitleg");
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      for (var n = el.firstChild; n; n = n.nextSibling) {
+        if (n.nodeType === 3 && /of upload het energielabel/i.test(n.nodeValue)) {
+          n.nodeValue = n.nodeValue.replace(/,?\s*of upload het energielabel/i, "");
+        }
+      }
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", introZonderUpload);
+  } else {
+    introZonderUpload();
+  }
 
   // ---- 3. Het venster met de maatregelpagina -------------------------------
   var venster = null;

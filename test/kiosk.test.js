@@ -91,3 +91,12 @@ test("een lead van de zuil zegt dat in de leadmail; van de website niet", async 
   assert.doesNotMatch(bouwLeadMail({ ...basis, kanaal: "website" }).html, /Zuil in de winkel/);
   assert.doesNotMatch(bouwLeadMail(basis).html, /Kanaal/);
 });
+
+test("op de zuil geen label-upload (DigiD): alleen het adres", () => {
+  // Het gedrag zelf is met Playwright op de WWW-startpagina nagelopen; hier
+  // dat de regels erin staan en alleen onder html.ov-kiosk gelden.
+  assert.match(BRON, /html\.ov-kiosk \[data-pdf-upload\]/);
+  assert.match(BRON, /html\.ov-kiosk \.intakeOfScheiding/);
+  assert.match(BRON, /of upload het energielabel/);
+  assert.doesNotMatch(BRON, /[^-]\[data-pdf-upload\]\{display:none/);
+});
