@@ -31,7 +31,11 @@
  * 4. Andere externe links (bronvermeldingen, nieuw tabblad) doen op de zuil
  *    niets: daar is geen browser om verder te surfen.
  * 5. Aanraakvriendelijk: grotere knoppen, velden en keuzerondjes, en geen
- *    PDF-download (die zou op de schijf van de zuil belanden).
+ *    PDF-download (die zou op de schijf van de zuil belanden). In plaats daarvan
+ *    (feedback WoonWijzerWinkel, 24 november 2026): de knop "Stuur dit rapport
+ *    naar mijn e-mail". Die opent hetzelfde formulier als de download op de
+ *    website, en de runtime mailt het snelle rapport als pdf naar het
+ *    e-mailadres uit dat formulier (/api/lead, kanaal "kiosk").
  * 6. Aanraking melden aan de zuil ({ event: "kiosk-pause-timer" }, het bericht
  *    dat de zuil al kent van de woningscan), zodat hij niet midden in het
  *    advies naar het beginscherm springt.
@@ -113,7 +117,6 @@
     // invoerveld zou anders los van zijn veld komen te staan.
     "html.ov-kiosk label:has(> input[type=radio]),html.ov-kiosk label:has(> input[type=checkbox]){min-height:44px}" +
     "html.ov-kiosk .mid-maatregel-link{display:inline-block;padding:8px 0;font-weight:600}" +
-    "html.ov-kiosk [data-action=rapport-downloaden]{display:none!important}" +
     // 7. Geen label-upload (DigiD): alleen het adres. Met !important, want de
     // app zet het uploadvak zelf aan (hidden = false) als de tenant het heeft.
     "html.ov-kiosk [data-pdf-upload],html.ov-kiosk .intakeUpload,html.ov-kiosk .intakeOfScheiding," +
@@ -224,6 +227,31 @@
       var doel = veiligeUrl(a.getAttribute("href"));
       var extern = doel && new URL(doel).origin !== window.location.origin;
       if (a.target === "_blank" || extern) e.preventDefault();
+    },
+    true
+  );
+
+  // ---- 5b. Het snelle rapport per e-mail in plaats van als download --------
+  var MAIL_KNOP = "Stuur dit rapport naar mijn e-mail";
+  function hernoemDownloadknop() {
+    var knoppen = document.querySelectorAll("[data-action=rapport-downloaden]");
+    for (var i = 0; i < knoppen.length; i++) {
+      if (knoppen[i].textContent !== MAIL_KNOP) knoppen[i].textContent = MAIL_KNOP;
+    }
+  }
+  if (typeof MutationObserver === "function") {
+    new MutationObserver(hernoemDownloadknop).observe(document.documentElement, { childList: true, subtree: true });
+  }
+  // Voor de app (mid_app.js) de klik pakt: altijd het formulier, ook als de gegevens in
+  // dit bezoek al gegeven zijn. Elke keer dat de bezoeker tikt, wil hij een mail.
+  document.addEventListener(
+    "click",
+    function (e) {
+      var knop = e.target && e.target.closest ? e.target.closest("[data-action=rapport-downloaden]") : null;
+      if (!knop) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (typeof window.openContactModal === "function") window.openContactModal("snel_rapport_download");
     },
     true
   );

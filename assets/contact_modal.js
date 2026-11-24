@@ -187,6 +187,52 @@
       if (grid) grid.style.display = bekend ? "none" : "";
       const sectie = $(modal, ".contactModal__sectionLabel");
       if (sectie) sectie.style.display = bekend ? "none" : "";
+      zetContactVelden();
+    }
+
+    // EEN NAAMVELD, OPTIONEEL, EN HET TELEFOONNUMMER ALLEEN BIJ EEN GESPREK (feedback
+    // WoonWijzerWinkel, 24 november 2026). Alleen als de rapportvragen in beeld staan en
+    // de gegevens nog gevraagd worden; anders staan de velden zoals de tenantpagina ze tekent.
+    // De runtime (/api/lead) past dezelfde regel toe.
+    const origineleLabels = {};
+    function labelSpan(naam) {
+      const veld = form?.elements?.[naam];
+      const rij = veld ? veld.closest("label") : null;
+      return rij ? rij.querySelector("span") : null;
+    }
+    function zetLabel(naam, html) {
+      const span = labelSpan(naam);
+      if (!span) return;
+      if (!(naam in origineleLabels)) origineleLabels[naam] = span.innerHTML;
+      span.innerHTML = html == null ? origineleLabels[naam] : html;
+    }
+    function zetContactVelden() {
+      const vragen = Boolean(vragenBlok && vragenBlok.style.display !== "none");
+      const bekend = Boolean($(modal, ".contactModal__grid") && $(modal, ".contactModal__grid").style.display === "none");
+      const kort = vragen && !bekend;
+      const voor = form?.elements?.firstName;
+      const achter = form?.elements?.lastName;
+      const tel = form?.elements?.phone;
+      if (voor) {
+        voor.required = !kort;
+        voor.setAttribute("autocomplete", kort ? "name" : "given-name");
+        zetLabel("firstName", kort ? 'Naam <span class="contactModal__hint">(optioneel)</span>' : null);
+      }
+      if (achter) {
+        achter.required = !kort;
+        const rij = rijVan(achter);
+        if (rij && !bekend) rij.style.display = kort ? "none" : "";
+      }
+      if (tel) {
+        const expertJa = Boolean(vragenBlok && vragenBlok.querySelector("input[name='wensExpert'][value='ja']:checked"));
+        const nodig = !kort || expertJa;
+        tel.required = nodig;
+        const rij = rijVan(tel);
+        if (rij && !bekend) rij.style.display = nodig ? "" : "none";
+        if (kort && expertJa) zetLabel("phone", 'Telefoonnummer <span class="contactModal__req" aria-hidden="true">*</span> <span class="contactModal__hint">(voor het gesprek met de expert)</span>');
+        else zetLabel("phone", null);
+      }
+      notifyHeightChange();
     }
 
     function close() {
@@ -330,6 +376,18 @@
       // Het merk op de pagina, niet de opvolgpartner: met de vragen aan gaan de gegevens
       // altijd naar de tenant zelf (besluit Dennis, 20 november 2026).
       const merk = (tenantData && tenantData.brand && tenantData.brand.name) || "ons";
+      // OP DE ZUIL GAAT HET SNELLE RAPPORT PER E-MAIL (feedback WoonWijzerWinkel, 24 november
+      // 2026): een download zou op de schijf van de zuil belanden. Zelfde formulier, andere
+      // woorden. De runtime mailt de pdf naar het e-mailadres uit dit formulier.
+      const zuil = downloadModus && window.OVKiosk && typeof window.OVKiosk.kanaal === "function" && window.OVKiosk.kanaal() === "kiosk";
+      if (zuil) {
+        if (titleEl) titleEl.textContent = "Rapport naar uw e-mail";
+        if (leadEl) leadEl.innerHTML = "Vul uw e-mailadres in, dan sturen wij het snelle rapport direct als pdf naar u toe." +
+          (metVragen ? " Uw gegevens gaan naar " + merk + "; er wordt alleen contact met u opgenomen als u hieronder kiest voor een gesprek of voor offertes." : "");
+        if (successBox) successBox.textContent = "Dank u wel. Het rapport is onderweg naar uw e-mailadres.";
+        if (submitBtn) submitBtn.textContent = "Rapport versturen";
+        return;
+      }
       if (titleEl) {
         titleEl.textContent = poortModus
           ? "Nog even uw gegevens"
@@ -505,6 +563,10 @@
       }
       vragenBlok.appendChild(jaNeeVraag("wensExpert", v.expertGesprek));
       vragenBlok.appendChild(jaNeeVraag("wensOffertes", v.offertes));
+      // Het telefoonnummer verschijnt en verdwijnt met het antwoord op het expertgesprek.
+      vragenBlok.addEventListener("change", function (e) {
+        if (e.target && e.target.name === "wensExpert") zetContactVelden();
+      });
 
       const keuze = document.createElement("label");
       keuze.style.cssText = "display:flex;flex-direction:column;gap:.35rem;";
@@ -540,9 +602,14 @@
         vragenBlok.appendChild(regel);
       }
 
-      // Boven het opmerkingenveld: eerst de vragen, dan de ruimte voor wat er nog over is.
+      // EERST DE VRAGEN, DAN DE CONTACTGEGEVENS (feedback WoonWijzerWinkel, 24 november
+      // 2026). De bezoeker beslist eerst wat hij wil -- een gesprek, offertes -- en ziet dan
+      // pas welke gegevens daarvoor nodig zijn: het telefoonnummer alleen bij een gesprek.
+      // Hiervoor stonden de vragen onder de contactvelden, boven het opmerkingenveld.
+      const kopContact = $(modal, ".contactModal__sectionLabel") || $(modal, ".contactModal__grid");
       const berichtRij = message ? message.closest("label") : null;
-      if (berichtRij && berichtRij.parentNode) berichtRij.parentNode.insertBefore(vragenBlok, berichtRij);
+      if (kopContact && kopContact.parentNode) kopContact.parentNode.insertBefore(vragenBlok, kopContact);
+      else if (berichtRij && berichtRij.parentNode) berichtRij.parentNode.insertBefore(vragenBlok, berichtRij);
       else {
         const acties = submitBtn ? submitBtn.closest(".contactModal__actions") : null;
         if (acties && acties.parentNode) acties.parentNode.insertBefore(vragenBlok, acties);
@@ -749,10 +816,16 @@
 
       // Quick client-side checks. Server validates again.
       const missing = [];
-      if (!data.firstName) missing.push("Voornaam");
-      if (!data.lastName)  missing.push("Achternaam");
+      // Met de vragen in beeld: een optioneel naamveld (in firstName) en een telefoonnummer
+      // alleen bij ja op het expertgesprek. Zie zetContactVelden().
+      const kort = Boolean(wensen) && form.lastName && form.lastName.required === false;
+      if (kort) data.lastName = "";
+      const telefoonNodig = !wensen || wensen.expertGesprek === "ja";
+      if (!kort && !data.firstName) missing.push("Voornaam");
+      if (!kort && !data.lastName)  missing.push("Achternaam");
       if (!data.email || !/^\S+@\S+\.\S+$/.test(data.email)) missing.push("E-mailadres");
-      if (!data.phone || data.phone.replace(/\D/g, "").length < 6) missing.push("Telefoonnummer");
+      if (telefoonNodig && (!data.phone || data.phone.replace(/\D/g, "").length < 6)) missing.push("Telefoonnummer");
+      if (!telefoonNodig) data.phone = "";
       if (wensen) {
         if (!wensen.expertGesprek) missing.push("gesprek met een expert (ja of nee)");
         if (!wensen.offertes) missing.push("offertes (ja of nee)");
@@ -810,6 +883,10 @@
         // Also collapse the lead paragraph so the modal feels resolved.
         const leadP = $(modal, ".contactModal__lead");
         if (leadP) leadP.style.display = "none";
+        // Op de zuil: lukte het mailen van het rapport niet, dan zegt de bedankregel dat.
+        if (json && json.rapport_gemaild === false && successBox) {
+          successBox.textContent = "Uw gegevens zijn ontvangen, maar het rapport kon niet worden gemaild. Vraag een medewerker in de winkel om het voor u te versturen.";
+        }
         successBox?.removeAttribute("hidden");
         notifyHeightChange();
         // De pagina mag hierna nog iets doen met dezelfde gegevens -- bij

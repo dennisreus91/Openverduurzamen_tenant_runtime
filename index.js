@@ -35,7 +35,7 @@ import { createMolliePayment, getMolliePayment, mollieTestmodus, refundMolliePay
 import { htmlToPdfBuffer } from "./lib/pdfbolt_client.js";
 import { runtimeVersie } from "./lib/runtime_versie.js";
 import { adviesAanvraagMail, losRapportHtml } from "./lib/advies_aanvraag.js";
-import { sendReportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail, sendBestelMelding, bestelMeldingAan } from "./lib/mail_client.js";
+import { sendReportEmail, sendSnelRapportEmail, sendLeadEmail, sendOrderAlertEmail, orderAlertsEnabled, sendMislukteOrderEmail, sendBestelMelding, bestelMeldingAan } from "./lib/mail_client.js";
 import { initPrefillStore, createPrefillSession, getPrefillSession, updatePrefillSession, findPrefillSession } from "./lib/prefill_store.js";
 import {
   overdrachtAan, sleutelUitVerzoek, sleutelKlopt, terugHosts, valideerOverdracht, maskeerEmail,
@@ -3650,10 +3650,17 @@ export function createTenantApp(config) {
       const akkoord = wensen ? toestemmingUitWensen(wensen) : body.akkoord === true;
 
       const errors = [];
-      if (!firstName) errors.push("Voornaam is verplicht.");
-      if (!lastName)  errors.push("Achternaam is verplicht.");
+      // MET DE RAPPORTVRAGEN: EEN OPTIONELE NAAM, EN HET TELEFOONNUMMER ALLEEN BIJ JA OP HET
+      // EXPERTGESPREK (feedback WoonWijzerWinkel, 24 november 2026). Wie alleen het rapport
+      // wil, hoort geen telefoonnummer te hoeven geven; wie om een gesprek vraagt wel. Het
+      // venster vraagt dan één naamveld, dat in firstName binnenkomt.
+      const naamVerplicht = !wensen;
+      const telefoonVerplicht = !wensen || wensen.expertGesprek === true;
+      if (naamVerplicht && !firstName) errors.push("Voornaam is verplicht.");
+      if (naamVerplicht && !lastName)  errors.push("Achternaam is verplicht.");
       if (!email || !/^\S+@\S+\.\S+$/.test(email)) errors.push("Geldig e-mailadres is verplicht.");
-      if (!phone || phone.replace(/\D/g, "").length < 6) errors.push("Geldig telefoonnummer is verplicht.");
+      if (telefoonVerplicht && (!phone || phone.replace(/\D/g, "").length < 6)) errors.push("Geldig telefoonnummer is verplicht.");
+      if (!telefoonVerplicht && phone && phone.replace(/\D/g, "").length < 6) errors.push("Het telefoonnummer is niet geldig.");
       if (errors.length) {
         return res.status(400).json({ ok: false, error: errors.join(" ") });
       }
@@ -3697,7 +3704,7 @@ export function createTenantApp(config) {
         glas_type: "Soort glas",
         // De maatregel waar de klant voor komt (assets/maatregelkeuze.js): voor de
         // partner het eerste waar hij op belt.
-        voorkeursmaatregel: "Interesse in maatregel",
+        voorkeursmaatregel: "Interesse in maatregel(en)",
       };
       function humanizeConfirmed(cd) {
         if (!cd || typeof cd !== "object") return [];
@@ -3705,6 +3712,12 @@ export function createTenantApp(config) {
         for (const key of Object.keys(FIELD_LABELS)) {
           const v = cd[key];
           if (v === undefined || v === null || v === "") continue;
+          // Meer maatregelen tegelijk (24 november 2026) komen als kommalijst.
+          if (key === "voorkeursmaatregel" && typeof v === "string" && v.includes(",")) {
+            const labels = v.split(",").map((x) => x.trim()).filter(Boolean).map((x) => LABEL_MAP[key]?.[x] || x);
+            if (labels.length) out.push([FIELD_LABELS[key], labels.join(", ")]);
+            continue;
+          }
           if (Array.isArray(v)) {
             const labels = v.map((x) => LABEL_MAP[key]?.[x] || x).filter(Boolean);
             if (labels.length) out.push([FIELD_LABELS[key], labels.join(", ")]);
@@ -3984,7 +3997,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
           : {}),
         ...(geenContactGewenst
           ? {
-              subject: `Rapport ${sourcePage === "snel_rapport_download" ? "gedownload" : "aangevraagd"}, geen contact gewenst — ${[firstName, lastName].filter(Boolean).join(" ")}`,
+              subject: `Rapport ${sourcePage === "snel_rapport_download" ? "gedownload" : "aangevraagd"}, geen contact gewenst — ${[firstName, lastName].filter(Boolean).join(" ") || email}`,
               heading: "Rapport zonder contactverzoek",
               intro: "De bezoeker koos NEE op een gesprek en NEE op offertes. Alleen voor uw administratie en CRM; neem geen contact op.",
             }
@@ -3995,6 +4008,25 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
           tenant: config.id,
         },
       });
+
+      // OP DE ZUIL GAAT HET SNELLE RAPPORT NAAR DE BEZOEKER ZELF (feedback WoonWijzerWinkel,
+      // 24 november 2026). Een download zou op de schijf van de zuil belanden. Het adres is
+      // het e-mailadres uit DIT formulier -- niet uit de poortcookie, want de zuil is een
+      // gedeeld scherm en de cookie kan van de vorige bezoeker zijn. De pdf is dezelfde als
+      // de bijlage van de leadmail hierboven, dus er wordt niets opnieuw gemaakt.
+      let rapportGemaild = false;
+      if (kanaal === "kiosk" && sourcePage === "snel_rapport_download") {
+        const pdf = attachments.find((a) => /\.pdf$/i.test(a.filename || ""));
+        if (pdf) {
+          try {
+            await sendSnelRapportEmail({ to: email, pdfBuffer: pdf.content, filename: pdf.filename.replace(/^snel_rapport_/, "snel_verduurzamingsinzicht_"), config, addressLine: leadAdres });
+            rapportGemaild = true;
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn("[lead] snel rapport mailen (zuil) mislukt:", e?.message || e);
+          }
+        }
+      }
 
       // En naar de centrale database, maar alleen met toestemming.
       //
@@ -4046,7 +4078,7 @@ html, body { margin: 0; padding: 0; background: ${pageBg}; }
       // De download telt mee in de conversie per postcode. De aanvraag van het volledige
       // rapport legt /api/full/aanvraag zelf vast, zodat die niet dubbel telt.
       if (sourcePage === "snel_rapport_download") postcodeVastleggen(ctxIn.address?.postalcode, "rapport_gedownload");
-      return res.json({ ok: true });
+      return res.json({ ok: true, ...(kanaal === "kiosk" && sourcePage === "snel_rapport_download" ? { rapport_gemaild: rapportGemaild } : {}) });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("[lead] verzenden mislukt:", e?.message || e);
