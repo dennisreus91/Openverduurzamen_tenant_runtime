@@ -473,7 +473,12 @@
      * maatregelen staat altijd een ISDE-regel die geen maatregel is.
      */
     function scenarioTekst(kaart) {
+      // De maatregellinks in het rapport dragen een verborgen hint voor schermlezers
+      // ("(opent in een nieuw tabblad)", lib/mid_renderer.js van de report-api). Die is
+      // visueel verborgen maar niet display:none, dus innerText neemt hem mee, en hij
+      // stond in de scenariokeuze van het downloadvenster (live WWW, 24-11-2026).
       const regels = String(kaart.innerText || kaart.textContent || "")
+        .replace(/\s*\(opent in een nieuw tabblad\)/gi, "")
         .split("\n").map(function (s) { return s.replace(/\s+/g, " ").trim(); }).filter(Boolean);
       if (!regels.length) return "";
       const naam = regels[0];
