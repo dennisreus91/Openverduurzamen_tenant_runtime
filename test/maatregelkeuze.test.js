@@ -36,19 +36,40 @@ test("de keuzes zijn die van de report-api, in de volgorde van het formulier", (
 
 test("eerst ja/nee; de maatregelen staan pas in beeld na ja", () => {
   const html = laad().blokHtml({ waarden: {} });
-  assert.match(html, /Hebt u behoefte aan een specifieke maatregel\?/);
+  assert.match(html, /Hebt u behoefte aan specifieke maatregelen\?/);
   assert.match(html, /data-field="maatregel_behoefte" value="ja"/);
   assert.match(html, /data-field="maatregel_behoefte" value="nee"/);
   assert.match(html, /data-maatregelkeuze-opties style="margin-top:8px;display:none"/);
-  for (const k of KEUZES) assert.match(html, new RegExp(`data-field="voorkeursmaatregel" value="${k}"`));
+  for (const k of KEUZES) assert.match(html, new RegExp(`data-maatregelkeuze-vink value="${k}"`));
 });
 
-test("precies een keuze: alle maatregelen zijn radio's in dezelfde groep", () => {
+test("meerkeuze (24 november 2026): vinkjes zonder data-field, een onzichtbaar veld met data-field", () => {
   const html = laad().blokHtml({ waarden: {} });
-  const radios = html.match(/<input type="radio" name="voorkeursmaatregel"/g) || [];
-  // De zes keuzes plus de onzichtbare terugval "geen".
-  assert.equal(radios.length, KEUZES.length + 1);
-  assert.doesNotMatch(html, /type="checkbox"/);
+  const vinkjes = html.match(/<input type="checkbox" data-maatregelkeuze-vink/g) || [];
+  assert.equal(vinkjes.length, KEUZES.length);
+  // De apps lezen een data-field als een enkele waarde: alleen het onzichtbare
+  // veld draagt hem, met de kommalijst of "geen".
+  const velden = html.match(/data-field="voorkeursmaatregel"/g) || [];
+  assert.equal(velden.length, 1);
+  assert.match(html, /Kies er een of meer/);
+});
+
+test("meer gekozen maatregelen komen terug als vinkjes en als kommalijst in het veld", () => {
+  const html = laad().blokHtml({ waarden: { voorkeursmaatregel: "dakisolatie,warmtepomp,onzin" } });
+  assert.match(html, /value="ja" checked/);
+  assert.match(html, /value="warmtepomp" checked/);
+  assert.match(html, /value="dakisolatie" checked/);
+  assert.doesNotMatch(html, /value="zonnepanelen" checked/);
+  assert.match(html, /data-field="voorkeursmaatregel" value="warmtepomp,dakisolatie" data-maatregelkeuze-veld checked/);
+});
+
+test("lijst en naam kennen een of meer keuzes", () => {
+  const m = laad();
+  assert.deepEqual(Array.from(m.lijst(["hr_glas", "warmtepomp", "x"])), ["warmtepomp", "hr_glas"]);
+  assert.deepEqual(Array.from(m.lijst("geen")), []);
+  assert.equal(m.naam("warmtepomp"), "Warmtepomp");
+  assert.equal(m.naam("warmtepomp,zonnepanelen,dakisolatie"), "Warmtepomp, Zonnepanelen en Dakisolatie");
+  assert.equal(m.naam("geen"), "");
 });
 
 test("een gekozen maatregel komt terug, met ja aangevinkt en de opties open", () => {
