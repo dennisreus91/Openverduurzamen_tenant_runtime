@@ -560,7 +560,15 @@ test("een bestand dat wij niet kunnen afleiden geeft ep2_invullen terug aan de p
 test("ep2_kwh_m2 gaat als correctie naar de report-api en komt terug in de samenvatting", async (t) => {
   let ontvangen = null;
   const reportApi = await server(t, async (req, res) => {
-    ontvangen = JSON.parse(await leesBody(req));
+    const body = await leesBody(req);
+    // Alleen het uitlezen telt. Een bestelling uit een eerdere test rendert op de achtergrond na en leest de render-url pas
+    // op dat moment uit de omgeving; kwam die laat, dan landde hij hier en overschreef hij `ontvangen` met een verzoek
+    // zonder opname_correcties (af en toe rood in de volle suite, nooit los).
+    if (req.url !== "/api/epa/ingest") {
+      res.writeHead(500, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "nep-render faalt" }));
+    }
+    ontvangen = JSON.parse(body);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       model: { ...MODEL, official: { label: "A++", ep2_door_adviseur: true } },
