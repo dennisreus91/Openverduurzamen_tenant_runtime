@@ -929,6 +929,21 @@ export function createTenantApp(config) {
     };
   }
 
+  // Een fout van de bezoeker (4xx van de report-api) blijft een 4xx, met de code en de keuzes erbij; alleen wat bij ons of bij
+  // de report-api zelf misgaat is een 500. Zie fetchLookupFromReportApi().
+  function lookupFout(res, e) {
+    const status = Number(e?.status);
+    if (status >= 400 && status < 500) {
+      const p = e.payload || {};
+      return res.status(status).json({
+        error: p.error || e.message,
+        ...(p.code ? { code: p.code } : {}),
+        ...(Array.isArray(p.toevoegingen) ? { toevoegingen: p.toevoegingen } : {}),
+      });
+    }
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+
   async function fetchLookupFromReportApi(address) {
     const url = getReportLookupUrl();
     if (!url) throw new Error("FULL_APP_LOOKUP_URL ontbreekt.");
@@ -943,7 +958,16 @@ export function createTenantApp(config) {
         dispatcher: longFetchAgent,
       });
       const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || `Lookup mislukt (${res.status})`);
+      if (!res.ok) {
+        // DE STATUS EN DE CODE VAN DE REPORT-API GAAN MEE (stap 9.12, 26-11-2026). Hier werd elke fout een kale Error, en de
+        // route maakte daar een 500 van. Ook "adres niet gevonden" (404) en "kies een toevoeging" (404, code kies_toevoeging,
+        // met de lijst toevoegingen) kwamen zo als serverfout bij het formulier aan; live gezien bij een huisnummer met 29A en
+        // 29B. Het formulier toont bij kies_toevoeging een knop per toevoeging.
+        const err = new Error(json?.error || `Lookup mislukt (${res.status})`);
+        err.status = res.status;
+        err.payload = json || null;
+        throw err;
+      }
       return json;
     } finally {
       clearTimeout(t);
@@ -2599,7 +2623,7 @@ export function createTenantApp(config) {
       postcodeVastleggen(address.postalcode, "opgezocht");
       const lookup = await fetchLookupFromReportApi(address);
       return res.json(lookup);
-    } catch (e) { return res.status(500).json({ error: e?.message || String(e) }); }
+    } catch (e) { return lookupFout(res, e); }
   });
 
   // -------------------------------------------------------------------------
@@ -2736,7 +2760,7 @@ export function createTenantApp(config) {
       postcodeVastleggen(address.postalcode, "opgezocht");
       const lookup = await fetchLookupFromReportApi(address);
       return res.json(lookup);
-    } catch (e) { return res.status(500).json({ error: e?.message || String(e) }); }
+    } catch (e) { return lookupFout(res, e); }
   });
 
   // Mid streaming (SSE). The report-api takes ~30-90s to write the short
