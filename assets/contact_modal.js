@@ -104,6 +104,93 @@
 
     let lastFocused = null;
 
+    // HET VENSTER IN BEELD IN EEN MEEGROEIENDE IFRAME (website WoonWijzerWinkel, 26 november 2026)
+    //
+    // Op een website staat deze pagina in een iframe die meegroeit met de inhoud (de
+    // pagina eromheen krijgt "mid_report_height"). Er is dan geen scrollbalk in de iframe:
+    // de iframe is net zo hoog als het rapport, soms 5000 pixels. Een venster met
+    // position:fixed staat dan bovenaan die iframe, terwijl de bezoeker onderaan bij de
+    // downloadknop zit -- buiten beeld. Live gemeten op woonwijzerwinkel.nl: 4000 pixels
+    // boven het scherm.
+    //
+    // Daarom vraagt het venster bij het openen aan de pagina eromheen welk deel van de
+    // iframe in beeld is ({ type: "ov-zicht-vraag" }). De inbouwcode antwoordt met
+    // { type: "ov-zicht", top, hoogte, eindeIframe }: het zichtbare deel in pixels van deze
+    // pagina, al onder de vaste menubalk van de site. Antwoordt de pagina niet (oudere
+    // inbouwcode), dan schatten we het met een IntersectionObserver; die ziet ook vanaf
+    // een ander domein welk deel op het scherm staat, maar loopt in Chrome soms achter.
+    // Past het venster niet omdat de iframe daar ophoudt (de downloadknop staat vlak boven
+    // het einde van het rapport), dan maken we de iframe tijdelijk langer; sluiten zet de
+    // hoogte terug. In de zuil (vaste hoogte, hele iframe in beeld) verandert er niets.
+    let vensterMinHoogte = 0;
+    let zichtWacht = null;
+    if (typeof window.addEventListener === "function") window.addEventListener("message", function (e) {
+      if (e.source !== window.parent || !e.data || typeof e.data !== "object") return;
+      if (e.data.type === "ov-zicht" && zichtWacht) {
+        const terug = zichtWacht;
+        zichtWacht = null;
+        const top = Number(e.data.top);
+        const hoogte = Number(e.data.hoogte);
+        terug(Number.isFinite(top) && Number.isFinite(hoogte) && hoogte > 0
+          ? { top: top, hoogte: hoogte, eindeIframe: e.data.eindeIframe === true }
+          : null);
+      }
+    });
+    function vraagZicht(terug) {
+      if (!window.parent || window.parent === window) return terug(null);
+      let klaar = false;
+      const eens = function (z) { if (klaar) return; klaar = true; terug(z); };
+      zichtWacht = eens;
+      try {
+        const ouder = new URLSearchParams(location.search).get("parentOrigin") || "*";
+        window.parent.postMessage({ type: "ov-zicht-vraag" }, ouder);
+      } catch (e) {}
+      setTimeout(function () {
+        if (klaar) return;
+        zichtWacht = null;
+        if (typeof IntersectionObserver !== "function") return eens(null);
+        try {
+          const io = new IntersectionObserver(function (entries) {
+            io.disconnect();
+            const z = entries && entries[0] && entries[0].intersectionRect;
+            eens(z && z.height > 0
+              ? { top: z.top, hoogte: z.height, eindeIframe: z.top + z.height >= window.innerHeight - 1 }
+              : null);
+          });
+          io.observe(document.documentElement);
+        } catch (e) { eens(null); }
+      }, 250);
+    }
+    function plaatsInBeeld(poging) {
+      const dialog = $(modal, ".contactModal__dialog");
+      if (!dialog) return;
+      if (!poging) {
+        dialog.style.marginTop = "";
+        dialog.style.maxHeight = "";
+      }
+      vraagZicht(function (z) {
+        if (!z || !modal.classList.contains("is-open")) return;
+        // Valt het zichtbare deel samen met de hele iframe, dan is de iframe niet
+        // hoger dan het scherm: de gewone opmaak klopt al.
+        if (z.top <= 1 && z.hoogte >= window.innerHeight - 1) return;
+        const marge = 12;
+        const boven = z.top + marge;
+        const ruimte = Math.max(240, z.hoogte - 2 * marge);
+        dialog.style.maxHeight = "none";
+        const nodig = dialog.scrollHeight;
+        dialog.style.maxHeight = Math.round(ruimte) + "px";
+        const hoogte = Math.min(nodig, ruimte);
+        dialog.style.marginTop = Math.round(boven + Math.max(0, (ruimte - hoogte) / 2)) + "px";
+        if (!poging && nodig > ruimte && z.eindeIframe) {
+          vensterMinHoogte = Math.ceil(boven + nodig + marge);
+          notifyHeightChange();
+          // De hoogte gaat eerst naar de pagina; die verwerkt berichten op volgorde,
+          // dus het tweede antwoord rekent al met de langere iframe.
+          plaatsInBeeld(1);
+        }
+      });
+    }
+
     function open(source) {
       // Teksten eerst: bij source "advies_partner" wordt dit het adviesvenster van
       // de partner, anders staan de oorspronkelijke teksten er weer. Zonder deze
@@ -133,7 +220,10 @@
       const srcInput = $(modal, "[name='sourcePage']");
       if (srcInput) srcInput.value = source || "";
       zetStand(source);
-      setTimeout(function () { (eersteZichtbareVeld() || submitBtn)?.focus(); }, 30);
+      plaatsInBeeld();
+      // preventScroll: de focus mag de pagina eromheen niet naar de bovenkant van de
+      // iframe laten springen; het venster staat al waar de bezoeker kijkt.
+      setTimeout(function () { (eersteZichtbareVeld() || submitBtn)?.focus({ preventScroll: true }); }, 30);
       notifyHeightChange();
     }
     /** Het eerste veld dat de bezoeker werkelijk kan invullen; in stand 2 zijn ze dicht. */
@@ -242,7 +332,8 @@
       // Reset state but keep field values in case user wants to reopen.
       successBox?.setAttribute("hidden", "");
       errorBox?.setAttribute("hidden", "");
-      if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+      if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus({ preventScroll: true });
+      vensterMinHoogte = 0;
       notifyHeightChange();
     }
 
@@ -271,7 +362,8 @@
         if (window.parent && window.parent !== window) {
           const h = Math.max(
             document.body?.scrollHeight || 0,
-            (document.querySelector(".appShell, .pageWrap") || document.body)?.getBoundingClientRect().bottom || 0
+            (document.querySelector(".appShell, .pageWrap") || document.body)?.getBoundingClientRect().bottom || 0,
+            modal.classList.contains("is-open") ? vensterMinHoogte : 0
           );
           // We send the same message shape mid_app.js uses, so the parent
           // listener picks it up either way.
